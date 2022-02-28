@@ -1,10 +1,9 @@
+'use strict';
 import { commands, ConfigurationChangeEvent, Disposable } from 'vscode';
 import { configuration, FileHistoryViewConfig } from '../configuration';
-import { Commands, ContextKeys } from '../constants';
+import { ContextKeys, setContext } from '../constants';
 import { Container } from '../container';
-import { setContext } from '../context';
 import { GitUri } from '../git/gitUri';
-import { executeCommand } from '../system/command';
 import { FileHistoryTrackerNode, LineHistoryTrackerNode } from './nodes';
 import { ViewBase } from './viewBase';
 
@@ -16,8 +15,8 @@ export class FileHistoryView extends ViewBase<FileHistoryTrackerNode | LineHisto
 	private _followCursor: boolean = false;
 	private _followEditor: boolean = true;
 
-	constructor(container: Container) {
-		super('gitlens.views.fileHistory', 'File History', container);
+	constructor() {
+		super('gitlens.views.fileHistory', 'File History');
 
 		void setContext(ContextKeys.ViewsFileHistoryCursorFollowing, this._followCursor);
 		void setContext(ContextKeys.ViewsFileHistoryEditorFollowing, this._followEditor);
@@ -32,12 +31,12 @@ export class FileHistoryView extends ViewBase<FileHistoryTrackerNode | LineHisto
 	}
 
 	protected registerCommands(): Disposable[] {
-		void this.container.viewCommands;
+		void Container.viewCommands;
 
 		return [
 			commands.registerCommand(
 				this.getQualifiedCommand('copy'),
-				() => executeCommand(Commands.ViewsCopy, this.selection),
+				() => commands.executeCommand('gitlens.views.copy', this.selection),
 				this,
 			),
 			commands.registerCommand(this.getQualifiedCommand('refresh'), () => this.refresh(true), this),

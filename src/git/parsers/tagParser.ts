@@ -1,5 +1,6 @@
-import { debug } from '../../system/decorators/log';
-import { GitTag } from '../models';
+'use strict';
+import { debug } from '../../system';
+import { GitTag } from '../git';
 
 const tagRegex = /^<n>(.+)<\*r>(.*)<r>(.*)<d>(.*)<ad>(.*)<s>(.*)$/gm;
 

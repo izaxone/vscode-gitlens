@@ -1,13 +1,11 @@
-import { ContextKeys, GlyphChars } from '../../constants';
+'use strict';
+import { GlyphChars } from '../../constants';
 import { Container } from '../../container';
-import { getContext } from '../../context';
-import { GitCommit, GitLog, Repository } from '../../git/models';
-import { searchOperators, SearchOperators, SearchPattern } from '../../git/search';
-import { ActionQuickPickItem, QuickPickItemOfT } from '../../quickpicks/items/common';
-import { pluralize } from '../../system/string';
+import { GitLog, GitLogCommit, Repository, SearchOperators, searchOperators, SearchPattern } from '../../git/git';
+import { ActionQuickPickItem, QuickPickItemOfT } from '../../quickpicks';
+import { Strings } from '../../system';
 import { SearchResultsNode } from '../../views/nodes';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
-import { getSteps } from '../gitCommands.utils';
+import { GitCommandsCommand } from '../gitCommands';
 import {
 	appendReposToTitle,
 	PartialStepState,
@@ -24,9 +22,7 @@ import {
 
 interface Context {
 	repos: Repository[];
-	associatedView: ViewsWithRepositoryFolders;
-	commit: GitCommit | undefined;
-	hasVirtualFolders: boolean;
+	commit: GitLogCommit | undefined;
 	resultsKey: string | undefined;
 	resultsPromise: Promise<GitLog | undefined> | undefined;
 	title: string;
@@ -60,8 +56,8 @@ const searchOperatorToTitleMap = new Map<SearchOperators, string>([
 type SearchStepState<T extends State = State> = ExcludeSome<StepState<T>, 'repo', string>;
 
 export class SearchGitCommand extends QuickCommand<State> {
-	constructor(container: Container, args?: SearchGitCommandArgs) {
-		super(container, 'search', 'search', 'Commit Search', {
+	constructor(args?: SearchGitCommandArgs) {
+		super('search', 'search', 'Commit Search', {
 			description: 'aka grep, searches for commits',
 		});
 
@@ -95,16 +91,14 @@ export class SearchGitCommand extends QuickCommand<State> {
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
-			associatedView: this.container.searchAndCompareView,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			commit: undefined,
-			hasVirtualFolders: getContext<boolean>(ContextKeys.HasVirtualFolders, false),
 			resultsKey: undefined,
 			resultsPromise: undefined,
 			title: this.title,
 		};
 
-		const cfg = this.container.config.gitCommands.search;
+		const cfg = Container.config.gitCommands.search;
 		if (state.matchAll == null) {
 			state.matchAll = cfg.matchAll;
 		}
@@ -172,7 +166,7 @@ export class SearchGitCommand extends QuickCommand<State> {
 
 			// eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
 			if (state.showResultsInSideBar) {
-				void this.container.searchAndCompareView.search(
+				void Container.searchAndCompareView.search(
 					state.repo.path,
 					search,
 					{
@@ -194,14 +188,14 @@ export class SearchGitCommand extends QuickCommand<State> {
 					placeholder: (context, log) =>
 						log == null
 							? `No results for ${state.pattern}`
-							: `${pluralize('result', log.count, {
+							: `${Strings.pluralize('result', log.count, {
 									format: c => (log.hasMore ? `${c}+` : undefined),
 							  })} for ${state.pattern}`,
 					picked: context.commit?.ref,
 					showInSideBarCommand: new ActionQuickPickItem(
 						'$(link-external)  Show Results in Side Bar',
 						() =>
-							void this.container.searchAndCompareView.search(
+							void Container.searchAndCompareView.search(
 								repoPath,
 								search,
 								{
@@ -218,7 +212,7 @@ export class SearchGitCommand extends QuickCommand<State> {
 					showInSideBarButton: {
 						button: QuickCommandButtons.ShowResultsInSideBar,
 						onDidClick: () =>
-							void this.container.searchAndCompareView.search(
+							void Container.searchAndCompareView.search(
 								repoPath,
 								search,
 								{
@@ -241,8 +235,7 @@ export class SearchGitCommand extends QuickCommand<State> {
 				context.commit = result;
 			}
 
-			const result = yield* getSteps(
-				this.container,
+			const result = yield* GitCommandsCommand.getSteps(
 				{
 					command: 'show',
 					state: {
@@ -266,33 +259,29 @@ export class SearchGitCommand extends QuickCommand<State> {
 			{
 				label: searchOperatorToTitleMap.get('')!,
 				description: `pattern or message: pattern or =: pattern ${GlyphChars.Dash} use quotes to search for phrases`,
-				item: 'message:' as const,
+				item: 'message:',
 			},
 			{
 				label: searchOperatorToTitleMap.get('author:')!,
 				description: 'author: pattern or @: pattern',
-				item: 'author:' as const,
+				item: 'author:',
 			},
 			{
 				label: searchOperatorToTitleMap.get('commit:')!,
 				description: 'commit: sha or #: sha',
-				item: 'commit:' as const,
+				item: 'commit:',
 			},
-			context.hasVirtualFolders
-				? undefined
-				: {
-						label: searchOperatorToTitleMap.get('file:')!,
-						description: 'file: glob or ?: glob',
-						item: 'file:' as const,
-				  },
-			context.hasVirtualFolders
-				? undefined
-				: {
-						label: searchOperatorToTitleMap.get('change:')!,
-						description: 'change: pattern or ~: pattern',
-						item: 'change:' as const,
-				  },
-		].filter(<T>(i?: T): i is T => i != null);
+			{
+				label: searchOperatorToTitleMap.get('file:')!,
+				description: 'file: glob or ?: glob',
+				item: 'file:',
+			},
+			{
+				label: searchOperatorToTitleMap.get('change:')!,
+				description: 'change: pattern or ~: pattern',
+				item: 'change:',
+			},
+		];
 
 		const matchCaseButton = new QuickCommandButtons.MatchCaseToggle(state.matchCase);
 		const matchAllButton = new QuickCommandButtons.MatchAllToggle(state.matchAll);

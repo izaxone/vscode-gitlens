@@ -1,3 +1,4 @@
+'use strict';
 import {
 	DecorationOptions,
 	Disposable,
@@ -10,12 +11,11 @@ import {
 	window,
 } from 'vscode';
 import { FileAnnotationType } from '../configuration';
-import { ContextKeys } from '../constants';
-import { setContext } from '../context';
+import { ContextKeys, setContext } from '../constants';
 import { Logger } from '../logger';
 import { GitDocumentState, TrackedDocument } from '../trackers/gitDocumentTracker';
 
-export const enum AnnotationStatus {
+export enum AnnotationStatus {
 	Computing = 'computing',
 	Computed = 'computed',
 }

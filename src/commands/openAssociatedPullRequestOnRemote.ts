@@ -1,15 +1,14 @@
+'use strict';
 import { TextEditor, Uri } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
 import { GitUri } from '../git/gitUri';
 import { Logger } from '../logger';
-import { command, executeCommand } from '../system/command';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { ActiveEditorCommand, command, Commands, executeCommand, getCommandUri } from './common';
 import { OpenPullRequestOnRemoteCommandArgs } from './openPullRequestOnRemote';
 
 @command()
 export class OpenAssociatedPullRequestOnRemoteCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.OpenAssociatedPullRequestOnRemote);
 	}
 
@@ -25,7 +24,7 @@ export class OpenAssociatedPullRequestOnRemoteCommand extends ActiveEditorComman
 		if (blameline < 0) return;
 
 		try {
-			const blame = await this.container.git.getBlameForLine(gitUri, blameline);
+			const blame = await Container.git.getBlameForLine(gitUri, blameline);
 			if (blame == null) return;
 
 			await executeCommand<OpenPullRequestOnRemoteCommandArgs>(Commands.OpenPullRequestOnRemote, {

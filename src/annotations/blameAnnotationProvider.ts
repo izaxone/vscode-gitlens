@@ -1,10 +1,11 @@
+'use strict';
 import { CancellationToken, Disposable, Hover, languages, Position, Range, TextDocument, TextEditor } from 'vscode';
 import { FileAnnotationType } from '../config';
 import { Container } from '../container';
+import { GitBlame, GitBlameCommit, GitCommit } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitBlame, GitCommit } from '../git/models';
 import { Hovers } from '../hovers/hovers';
-import { log } from '../system/decorators/log';
+import { log } from '../system';
 import { GitDocumentState, TrackedDocument } from '../trackers/gitDocumentTracker';
 import { AnnotationProviderBase } from './annotationProvider';
 import { ComputedHeatmap, getHeatmapColors } from './annotations';
@@ -17,11 +18,12 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
 		annotationType: FileAnnotationType,
 		editor: TextEditor,
 		trackedDocument: TrackedDocument<GitDocumentState>,
-		protected readonly container: Container,
 	) {
 		super(annotationType, editor, trackedDocument);
 
-		this.blame = this.container.git.getBlame(this.trackedDocument.uri, editor.document);
+		this.blame = editor.document.isDirty
+			? Container.git.getBlameForFileContents(this.trackedDocument.uri, editor.document.getText())
+			: Container.git.getBlameForFile(this.trackedDocument.uri);
 
 		if (editor.document.isDirty) {
 			trackedDocument.setForceDirtyStateChangeOnNextDocumentChange();
@@ -67,7 +69,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
 		dates.sort((a, b) => a.getTime() - b.getTime());
 
 		const coldThresholdDate = new Date();
-		coldThresholdDate.setDate(coldThresholdDate.getDate() - (this.container.config.heatmap.ageThreshold || 90));
+		coldThresholdDate.setDate(coldThresholdDate.getDate() - (Container.config.heatmap.ageThreshold || 90));
 		const coldThresholdTimestamp = coldThresholdDate.getTime();
 
 		const hotDates: Date[] = [];
@@ -120,8 +122,8 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
 
 	registerHoverProviders(providers: { details: boolean; changes: boolean }) {
 		if (
-			!this.container.config.hovers.enabled ||
-			!this.container.config.hovers.annotations.enabled ||
+			!Container.config.hovers.enabled ||
+			!Container.config.hovers.annotations.enabled ||
 			(!providers.details && !providers.changes)
 		) {
 			return;
@@ -142,7 +144,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
 		position: Position,
 		_token: CancellationToken,
 	): Promise<Hover | undefined> {
-		if (this.container.config.hovers.annotations.over !== 'line' && position.character !== 0) return undefined;
+		if (Container.config.hovers.annotations.over !== 'line' && position.character !== 0) return undefined;
 
 		if (this.document.uri.toString() !== document.uri.toString()) return undefined;
 
@@ -158,7 +160,7 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
 			await Promise.all([
 				providers.details ? this.getDetailsHoverMessage(commit, document) : undefined,
 				providers.changes
-					? Hovers.changesMessage(commit, await GitUri.fromUri(document.uri), position.line, document)
+					? Hovers.changesMessage(commit, await GitUri.fromUri(document.uri), position.line)
 					: undefined,
 			])
 		).filter(<T>(m?: T): m is T => Boolean(m));
@@ -169,22 +171,35 @@ export abstract class BlameAnnotationProviderBase extends AnnotationProviderBase
 		);
 	}
 
-	private async getDetailsHoverMessage(commit: GitCommit, document: TextDocument) {
+	private async getDetailsHoverMessage(commit: GitBlameCommit, document: TextDocument) {
+		// Get the full commit message -- since blame only returns the summary
+		let logCommit: GitCommit | undefined = undefined;
+		if (!commit.isUncommitted) {
+			logCommit = await Container.git.getCommitForFile(commit.repoPath, commit.uri.fsPath, {
+				ref: commit.sha,
+			});
+			if (logCommit != null) {
+				// Preserve the previous commit from the blame commit
+				logCommit.previousFileName = commit.previousFileName;
+				logCommit.previousSha = commit.previousSha;
+			}
+		}
+
 		let editorLine = this.editor.selection.active.line;
 		const line = editorLine + 1;
 		const commitLine = commit.lines.find(l => l.line === line) ?? commit.lines[0];
 		editorLine = commitLine.originalLine - 1;
 
 		return Hovers.detailsMessage(
-			commit,
+			logCommit ?? commit,
 			await GitUri.fromUri(document.uri),
 			editorLine,
-			this.container.config.hovers.detailsMarkdownFormat,
-			this.container.config.defaultDateFormat,
+			Container.config.hovers.detailsMarkdownFormat,
+			Container.config.defaultDateFormat,
 			{
-				autolinks: this.container.config.hovers.autolinks.enabled,
+				autolinks: Container.config.hovers.autolinks.enabled,
 				pullRequests: {
-					enabled: this.container.config.hovers.pullRequests.enabled,
+					enabled: Container.config.hovers.pullRequests.enabled,
 				},
 			},
 		);

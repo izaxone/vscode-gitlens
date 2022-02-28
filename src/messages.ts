@@ -1,11 +1,10 @@
-import { ConfigurationTarget, MessageItem, window } from 'vscode';
+'use strict';
+import { ConfigurationTarget, env, MessageItem, Uri, window } from 'vscode';
 import { configuration } from './configuration';
-import { Commands } from './constants';
-import { GitCommit } from './git/models';
+import { GitCommit } from './git/git';
 import { Logger } from './logger';
-import { executeCommand } from './system/command';
 
-export const enum SuppressedMessages {
+export enum SuppressedMessages {
 	CommitHasNoPreviousCommitWarning = 'suppressCommitHasNoPreviousCommitWarning',
 	CommitNotFoundWarning = 'suppressCommitNotFoundWarning',
 	CreatePullRequestPrompt = 'suppressCreatePullRequestPrompt',
@@ -14,6 +13,7 @@ export const enum SuppressedMessages {
 	GitDisabledWarning = 'suppressGitDisabledWarning',
 	GitMissingWarning = 'suppressGitMissingWarning',
 	GitVersionWarning = 'suppressGitVersionWarning',
+	IncorrectWorkspaceCasingWarning = 'suppressImproperWorkspaceCasingWarning',
 	LineUncommittedWarning = 'suppressLineUncommittedWarning',
 	NoRepositoryWarning = 'suppressNoRepositoryWarning',
 	RebaseSwitchToTextWarning = 'suppressRebaseSwitchToTextWarning',
@@ -21,7 +21,7 @@ export const enum SuppressedMessages {
 
 export class Messages {
 	static showCommitHasNoPreviousCommitWarningMessage(commit?: GitCommit): Promise<MessageItem | undefined> {
-		if (commit == null) {
+		if (commit === undefined) {
 			return Messages.showMessage(
 				'info',
 				'There is no previous commit.',
@@ -30,7 +30,7 @@ export class Messages {
 		}
 		return Messages.showMessage(
 			'info',
-			`Commit ${commit.shortSha} (${commit.author.name}, ${commit.formattedDate}) has no previous commit.`,
+			`Commit ${commit.shortSha} (${commit.author}, ${commit.formattedDate}) has no previous commit.`,
 			SuppressedMessages.CommitHasNoPreviousCommitWarning,
 		);
 	}
@@ -123,6 +123,14 @@ export class Messages {
 		);
 	}
 
+	static async showIncorrectWorkspaceCasingWarningMessage(): Promise<void> {
+		void (await Messages.showMessage(
+			'warn',
+			'This workspace was opened with a different casing than what exists on disk. Please re-open this workspace with the exact casing as it exists on disk, otherwise you may experience issues with certain Git features, such as missing blame or history.',
+			SuppressedMessages.IncorrectWorkspaceCasingWarning,
+		));
+	}
+
 	static showInsidersErrorMessage() {
 		return Messages.showMessage(
 			'error',
@@ -156,17 +164,17 @@ export class Messages {
 	}
 
 	static async showWhatsNewMessage(version: string) {
-		const whatsnew = { title: "See What's New" };
+		const whatsnew = { title: "What's New" };
 		const result = await Messages.showMessage(
 			'info',
-			`GitLens ${version} is here — check out what's new!`,
+			`GitLens has been updated to v${version} — check out what's new!`,
 			undefined,
 			null,
 			whatsnew,
 		);
 
 		if (result === whatsnew) {
-			void (await executeCommand(Commands.ShowWelcomePage));
+			await env.openExternal(Uri.parse('https://gitlens.amod.io/#whats-new'));
 		}
 	}
 

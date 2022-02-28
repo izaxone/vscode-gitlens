@@ -5,7 +5,7 @@
 
 import { Disposable, Event, ProviderResult, Uri } from 'vscode';
 
-import { GitErrorCodes, RefType, Status } from '../@types/vscode.git.enums';
+export { ProviderResult } from 'vscode';
 
 export interface Git {
 	readonly path: string;
@@ -13,6 +13,12 @@ export interface Git {
 
 export interface InputBox {
 	value: string;
+}
+
+export const enum RefType {
+	Head,
+	RemoteHead,
+	Tag
 }
 
 export interface Ref {
@@ -56,7 +62,30 @@ export interface Remote {
 	readonly isReadOnly: boolean;
 }
 
+export const enum Status {
+	INDEX_MODIFIED,
+	INDEX_ADDED,
+	INDEX_DELETED,
+	INDEX_RENAMED,
+	INDEX_COPIED,
+
+	MODIFIED,
+	DELETED,
+	UNTRACKED,
+	IGNORED,
+	INTENT_TO_ADD,
+
+	ADDED_BY_US,
+	ADDED_BY_THEM,
+	DELETED_BY_US,
+	DELETED_BY_THEM,
+	BOTH_ADDED,
+	BOTH_DELETED,
+	BOTH_MODIFIED
+}
+
 export interface Change {
+
 	/**
 	 * Returns either `originalUri` or `renameUri`, depending
 	 * on whether this change is a rename change. When
@@ -112,18 +141,19 @@ export interface BranchQuery {
 }
 
 export interface Repository {
+
 	readonly rootUri: Uri;
 	readonly inputBox: InputBox;
 	readonly state: RepositoryState;
 	readonly ui: RepositoryUIState;
 
-	getConfigs(): Promise<{ key: string; value: string }[]>;
+	getConfigs(): Promise<{ key: string; value: string; }[]>;
 	getConfig(key: string): Promise<string>;
 	setConfig(key: string, value: string): Promise<string>;
 	getGlobalConfig(key: string): Promise<string>;
 
-	getObjectDetails(treeish: string, path: string): Promise<{ mode: string; object: string; size: number }>;
-	detectObjectType(object: string): Promise<{ mimetype: string; encoding?: string }>;
+	getObjectDetails(treeish: string, path: string): Promise<{ mode: string, object: string, size: number }>;
+	detectObjectType(object: string): Promise<{ mimetype: string, encoding?: string }>;
 	buffer(ref: string, path: string): Promise<Buffer>;
 	show(ref: string, path: string): Promise<string>;
 	getCommit(ref: string): Promise<Commit>;
@@ -195,12 +225,7 @@ export interface CredentialsProvider {
 }
 
 export interface PushErrorHandler {
-	handlePushError(
-		repository: Repository,
-		remote: Remote,
-		refspec: string,
-		error: Error & { gitErrorCode: GitErrorCodes },
-	): Promise<boolean>;
+	handlePushError(repository: Repository, remote: Remote, refspec: string, error: Error & { gitErrorCode: GitErrorCodes }): Promise<boolean>;
 }
 
 export type APIState = 'uninitialized' | 'initialized';
@@ -216,7 +241,7 @@ export interface API {
 	toGitUri(uri: Uri, ref: string): Uri;
 	getRepository(uri: Uri): Repository | null;
 	init(root: Uri): Promise<Repository | null>;
-	openRepository?(root: Uri): Promise<Repository | null>;
+	openRepository?(root: Uri): Promise<Repository | null>
 
 	registerRemoteSourceProvider(provider: RemoteSourceProvider): Disposable;
 	registerCredentialsProvider(provider: CredentialsProvider): Disposable;
@@ -224,6 +249,7 @@ export interface API {
 }
 
 export interface GitExtension {
+
 	readonly enabled: boolean;
 	readonly onDidChangeEnablement: Event<boolean>;
 
@@ -238,4 +264,42 @@ export interface GitExtension {
 	 * @returns API instance
 	 */
 	getAPI(version: 1): API;
+}
+
+export const enum GitErrorCodes {
+	BadConfigFile = 'BadConfigFile',
+	AuthenticationFailed = 'AuthenticationFailed',
+	NoUserNameConfigured = 'NoUserNameConfigured',
+	NoUserEmailConfigured = 'NoUserEmailConfigured',
+	NoRemoteRepositorySpecified = 'NoRemoteRepositorySpecified',
+	NotAGitRepository = 'NotAGitRepository',
+	NotAtRepositoryRoot = 'NotAtRepositoryRoot',
+	Conflict = 'Conflict',
+	StashConflict = 'StashConflict',
+	UnmergedChanges = 'UnmergedChanges',
+	PushRejected = 'PushRejected',
+	RemoteConnectionError = 'RemoteConnectionError',
+	DirtyWorkTree = 'DirtyWorkTree',
+	CantOpenResource = 'CantOpenResource',
+	GitNotFound = 'GitNotFound',
+	CantCreatePipe = 'CantCreatePipe',
+	PermissionDenied = 'PermissionDenied',
+	CantAccessRemote = 'CantAccessRemote',
+	RepositoryNotFound = 'RepositoryNotFound',
+	RepositoryIsLocked = 'RepositoryIsLocked',
+	BranchNotFullyMerged = 'BranchNotFullyMerged',
+	NoRemoteReference = 'NoRemoteReference',
+	InvalidBranchName = 'InvalidBranchName',
+	BranchAlreadyExists = 'BranchAlreadyExists',
+	NoLocalChanges = 'NoLocalChanges',
+	NoStashFound = 'NoStashFound',
+	LocalChangesOverwritten = 'LocalChangesOverwritten',
+	NoUpstreamBranch = 'NoUpstreamBranch',
+	IsInSubmodule = 'IsInSubmodule',
+	WrongCase = 'WrongCase',
+	CantLockRef = 'CantLockRef',
+	CantRebaseMultipleBranches = 'CantRebaseMultipleBranches',
+	PatchDoesNotApply = 'PatchDoesNotApply',
+	NoPathFound = 'NoPathFound',
+	UnknownPath = 'UnknownPath',
 }

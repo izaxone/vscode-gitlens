@@ -1,6 +1,15 @@
+'use strict';
+import { Command } from 'vscode';
+
+export function command<T extends unknown[]>(command: Omit<Command, 'arguments'> & { arguments: [...T] }): Command {
+	return command;
+}
+
 export * from './commands/addAuthors';
 export * from './commands/browseRepoAtRevision';
 export * from './commands/closeUnchangedFiles';
+export * from './commands/closeView';
+export * from './commands/common';
 export * from './commands/compareWith';
 export * from './commands/copyCurrentBranch';
 export * from './commands/copyMessageToClipboard';
@@ -30,7 +39,6 @@ export * from './commands/openFileOnRemote';
 export * from './commands/openFileAtRevision';
 export * from './commands/openFileAtRevisionFrom';
 export * from './commands/openOnRemote';
-export * from './commands/openIssueOnRemote';
 export * from './commands/openPullRequestOnRemote';
 export * from './commands/openRepoOnRemote';
 export * from './commands/openRevisionFile';
@@ -58,4 +66,3 @@ export * from './commands/switchMode';
 export * from './commands/toggleCodeLens';
 export * from './commands/toggleFileAnnotations';
 export * from './commands/toggleLineBlame';
-export * from './commands/walkthroughs';

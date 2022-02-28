@@ -1,10 +1,9 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { ViewBranchesLayout } from '../../configuration';
+import { Repository } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { Repository } from '../../git/models';
-import { makeHierarchical } from '../../system/array';
-import { gate } from '../../system/decorators/gate';
-import { debug } from '../../system/decorators/log';
+import { Arrays, debug, gate } from '../../system';
 import { RepositoriesView } from '../repositoriesView';
 import { TagsView } from '../tagsView';
 import { BranchOrTagFolderNode } from './branchOrTagFolderNode';
@@ -36,15 +35,14 @@ export class TagsNode extends ViewNode<TagsView | RepositoriesView> {
 	async getChildren(): Promise<ViewNode[]> {
 		if (this._children == null) {
 			const tags = await this.repo.getTags({ sort: true });
-			if (tags.values.length === 0) return [new MessageNode(this.view, this, 'No tags could be found.')];
+			if (tags.length === 0) return [new MessageNode(this.view, this, 'No tags could be found.')];
 
-			// TODO@eamodio handle paging
-			const tagNodes = tags.values.map(
+			const tagNodes = tags.map(
 				t => new TagNode(GitUri.fromRepoPath(this.uri.repoPath!, t.ref), this.view, this, t),
 			);
 			if (this.view.config.branches.layout === ViewBranchesLayout.List) return tagNodes;
 
-			const hierarchy = makeHierarchical(
+			const hierarchy = Arrays.makeHierarchical(
 				tagNodes,
 				n => n.tag.name.split('/'),
 				(...paths) => paths.join('/'),

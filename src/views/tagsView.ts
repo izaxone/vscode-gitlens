@@ -1,3 +1,4 @@
+'use strict';
 import {
 	CancellationToken,
 	commands,
@@ -9,24 +10,23 @@ import {
 	window,
 } from 'vscode';
 import { configuration, TagsViewConfig, ViewBranchesLayout, ViewFilesLayout } from '../configuration';
-import { Commands } from '../constants';
+import { GlyphChars } from '../constants';
 import { Container } from '../container';
-import { GitUri } from '../git/gitUri';
 import {
 	GitReference,
 	GitTagReference,
 	RepositoryChange,
 	RepositoryChangeComparisonMode,
 	RepositoryChangeEvent,
-} from '../git/models';
-import { executeCommand } from '../system/command';
-import { gate } from '../system/decorators/gate';
+} from '../git/git';
+import { GitUri } from '../git/gitUri';
+import { debug, gate, Strings } from '../system';
 import {
 	BranchOrTagFolderNode,
-	RepositoriesSubscribeableNode,
 	RepositoryFolderNode,
 	RepositoryNode,
 	TagsNode,
+	unknownGitUri,
 	ViewNode,
 } from './nodes';
 import { ViewBase } from './viewBase';
@@ -45,10 +45,17 @@ export class TagsRepositoryNode extends RepositoryFolderNode<TagsView, TagsNode>
 	}
 }
 
-export class TagsViewNode extends RepositoriesSubscribeableNode<TagsView, TagsRepositoryNode> {
+export class TagsViewNode extends ViewNode<TagsView> {
+	protected override splatted = true;
+	private children: TagsRepositoryNode[] | undefined;
+
+	constructor(view: TagsView) {
+		super(unknownGitUri, view);
+	}
+
 	async getChildren(): Promise<ViewNode[]> {
 		if (this.children == null) {
-			const repositories = this.view.container.git.openRepositories;
+			const repositories = await Container.git.getOrderedRepositories();
 			if (repositories.length === 0) {
 				this.view.message = 'No tags could be found.';
 
@@ -66,8 +73,12 @@ export class TagsViewNode extends RepositoriesSubscribeableNode<TagsView, TagsRe
 		if (this.children.length === 1) {
 			const [child] = this.children;
 
+			if (!child.repo.supportsChangeEvents) {
+				this.view.description = `${Strings.pad(GlyphChars.Warning, 0, 2)}Auto-refresh unavailable`;
+			}
+
 			const tags = await child.repo.getTags();
-			if (tags.values.length === 0) {
+			if (tags.length === 0) {
 				this.view.message = 'No tags could be found.';
 				this.view.title = 'Tags';
 
@@ -77,7 +88,7 @@ export class TagsViewNode extends RepositoriesSubscribeableNode<TagsView, TagsRe
 			}
 
 			this.view.message = undefined;
-			this.view.title = `Tags (${tags.values.length})`;
+			this.view.title = `Tags (${tags.length})`;
 
 			return child.getChildren();
 		}
@@ -89,36 +100,51 @@ export class TagsViewNode extends RepositoriesSubscribeableNode<TagsView, TagsRe
 		const item = new TreeItem('Tags', TreeItemCollapsibleState.Expanded);
 		return item;
 	}
+
+	override async getSplattedChild() {
+		if (this.children == null) {
+			await this.getChildren();
+		}
+
+		return this.children?.length === 1 ? this.children[0] : undefined;
+	}
+
+	@gate()
+	@debug()
+	override refresh(reset: boolean = false) {
+		if (reset && this.children != null) {
+			for (const child of this.children) {
+				child.dispose();
+			}
+			this.children = undefined;
+		}
+	}
 }
 
 export class TagsView extends ViewBase<TagsViewNode, TagsViewConfig> {
 	protected readonly configKey = 'tags';
 
-	constructor(container: Container) {
-		super('gitlens.views.tags', 'Tags', container);
+	constructor() {
+		super('gitlens.views.tags', 'Tags');
 	}
 
-	override get canReveal(): boolean {
-		return this.config.reveal || !configuration.get('views.repositories.showTags');
-	}
-
-	protected getRoot() {
+	getRoot() {
 		return new TagsViewNode(this);
 	}
 
 	protected registerCommands(): Disposable[] {
-		void this.container.viewCommands;
+		void Container.viewCommands;
 
 		return [
 			commands.registerCommand(
 				this.getQualifiedCommand('copy'),
-				() => executeCommand(Commands.ViewsCopy, this.selection),
+				() => commands.executeCommand('gitlens.views.copy', this.selection),
 				this,
 			),
 			commands.registerCommand(
 				this.getQualifiedCommand('refresh'),
-				() => {
-					this.container.git.resetCaches('tags');
+				async () => {
+					await Container.git.resetCaches('tags');
 					return this.refresh(true);
 				},
 				this,
@@ -199,23 +225,6 @@ export class TagsView extends ViewBase<TagsViewNode, TagsViewConfig> {
 	}
 
 	@gate(() => '')
-	async revealRepository(
-		repoPath: string,
-		options?: { select?: boolean; focus?: boolean; expand?: boolean | number },
-	) {
-		const node = await this.findNode(RepositoryFolderNode.getId(repoPath), {
-			maxDepth: 1,
-			canTraverse: n => n instanceof TagsViewNode || n instanceof RepositoryFolderNode,
-		});
-
-		if (node !== undefined) {
-			await this.reveal(node, options);
-		}
-
-		return node;
-	}
-
-	@gate(() => '')
 	revealTag(
 		tag: GitTagReference,
 		options?: {
@@ -227,7 +236,7 @@ export class TagsView extends ViewBase<TagsViewNode, TagsViewConfig> {
 		return window.withProgress(
 			{
 				location: ProgressLocation.Notification,
-				title: `Revealing ${GitReference.toString(tag, { icon: false, quoted: true })} in the side bar...`,
+				title: `Revealing ${GitReference.toString(tag, { icon: false })} in the side bar...`,
 				cancellable: true,
 			},
 			async (progress, token) => {

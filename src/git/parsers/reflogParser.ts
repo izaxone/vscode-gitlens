@@ -1,4 +1,5 @@
-import { debug } from '../../system/decorators/log';
+'use strict';
+import { debug } from '../../system';
 import { GitReflog, GitReflogRecord } from '../models/reflog';
 
 const reflogRegex = /^<r>(.+)<d>(.+?)@{(.+)}<s>(\w*)(.*?)(?::(.*))?$/gm;

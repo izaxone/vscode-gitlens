@@ -1,3 +1,4 @@
+'use strict';
 import { Disposable, Terminal, window } from 'vscode';
 import { Container } from './container';
 
@@ -18,7 +19,7 @@ function ensureTerminal(cwd: string): Terminal {
 			}
 		});
 
-		Container.instance.context.subscriptions.push(_disposable);
+		Container.context.subscriptions.push(_disposable);
 		_terminalCwd = undefined;
 	}
 

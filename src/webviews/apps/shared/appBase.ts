@@ -1,20 +1,13 @@
+'use strict';
 /*global window document*/
-import {
-	IpcCommandType,
-	IpcMessage,
-	IpcMessageParams,
-	IpcNotificationType,
-	onIpc,
-	WebviewReadyCommandType,
-} from '../../protocol';
-import { DOM } from './dom';
+import { IpcCommandParamsOf, IpcCommandType, IpcMessage, ReadyCommandType } from '../../protocol';
 import { Disposable } from './events';
 import { initializeAndWatchThemeColors } from './theme';
 
 interface VsCodeApi {
-	postMessage(msg: unknown): void;
-	setState(state: unknown): void;
-	getState(): unknown;
+	postMessage(msg: object): void;
+	setState(state: object): void;
+	getState(): object;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -30,39 +23,35 @@ function nextIpcId() {
 	return `webview:${ipcSequence}`;
 }
 
-export abstract class App<State = void> {
+export abstract class App<State extends object> {
 	private readonly _api: VsCodeApi;
 	protected state: State;
 
-	constructor(protected readonly appName: string) {
+	constructor(protected readonly appName: string, state: State) {
 		this.log(`${this.appName}.ctor`);
-
-		this.state = (window as any).bootstrap;
-		(window as any).bootstrap = undefined;
 
 		this._api = acquireVsCodeApi();
 		initializeAndWatchThemeColors();
 
-		requestAnimationFrame(() => {
+		this.state = state;
+		setTimeout(() => {
 			this.log(`${this.appName}.initializing`);
 
-			try {
-				this.onInitialize?.();
-				this.bind();
+			this.onInitialize?.();
+			this.bind();
 
-				if (this.onMessageReceived != null) {
-					window.addEventListener('message', this.onMessageReceived.bind(this));
-				}
-
-				this.sendCommand(WebviewReadyCommandType, undefined);
-
-				this.onInitialized?.();
-			} finally {
-				setTimeout(() => {
-					document.body.classList.remove('preload');
-				}, 500);
+			if (this.onMessageReceived != null) {
+				window.addEventListener('message', this.onMessageReceived.bind(this));
 			}
-		});
+
+			this.sendCommand(ReadyCommandType, {});
+
+			this.onInitialized?.();
+
+			setTimeout(() => {
+				document.body.classList.remove('preload');
+			}, 500);
+		}, 0);
 	}
 
 	protected onInitialize?(): void;
@@ -76,52 +65,20 @@ export abstract class App<State = void> {
 		this.bindDisposables = this.onBind?.();
 	}
 
-	protected log(message: string) {
-		console.log(message);
+	protected log(_message: string) {
+		// console.log(message);
 	}
 
 	protected getState(): State {
 		return this._api.getState() as State;
 	}
 
-	protected sendCommand<TCommand extends IpcCommandType<any>>(
-		command: TCommand,
-		params: IpcMessageParams<TCommand>,
-	): void {
-		const id = nextIpcId();
-		this.log(`${this.appName}.sendCommand(${id}): name=${command.method}`);
-
-		return this.postMessage({ id: id, method: command.method, params: params });
-	}
-
-	protected sendCommandWithCompletion<
-		TCommand extends IpcCommandType<any>,
-		TCompletion extends IpcNotificationType<{ completionId: string }>,
-	>(
-		command: TCommand,
-		params: IpcMessageParams<TCommand>,
-		completion: TCompletion,
-		callback: (params: IpcMessageParams<TCompletion>) => void,
-	): void {
-		const id = nextIpcId();
-		this.log(`${this.appName}.sendCommandWithCompletion(${id}): name=${command.method}`);
-
-		const disposable = DOM.on(window, 'message', e => {
-			onIpc(completion, e.data as IpcMessage, params => {
-				if (params.completionId === id) {
-					disposable.dispose();
-					callback(params);
-				}
-			});
-		});
-
-		return this.postMessage({ id: id, method: command.method, params: params });
+	protected sendCommand<CT extends IpcCommandType>(type: CT, params: IpcCommandParamsOf<CT>): void {
+		return this.postMessage({ id: nextIpcId(), method: type.method, params: params });
 	}
 
 	protected setState(state: State) {
 		this.state = state;
-		if (state == null) return;
-
 		this._api.setState(state);
 	}
 

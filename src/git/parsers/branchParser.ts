@@ -1,4 +1,5 @@
-import { debug } from '../../system/decorators/log';
+'use strict';
+import { debug } from '../../system';
 import { GitBranch } from '../models/branch';
 
 const branchWithTrackingRegex =

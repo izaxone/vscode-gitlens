@@ -1,18 +1,24 @@
+'use strict';
 import { TextEditor, Uri } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
+import { GitCommit, GitLog, GitLogCommit } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitCommit, GitLog, GitStashCommit } from '../git/models';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command } from '../system/command';
-import { ActiveEditorCachedCommand, CommandContext, getCommandUri, isCommandContextViewNodeHasCommit } from './base';
-import { executeGitCommand, GitActions } from './gitCommands.actions';
+import {
+	ActiveEditorCachedCommand,
+	command,
+	CommandContext,
+	Commands,
+	getCommandUri,
+	isCommandContextViewNodeHasCommit,
+} from './common';
+import { executeGitCommand, GitActions } from './gitCommands';
 
 export interface ShowQuickCommitCommandArgs {
 	repoPath?: string;
 	sha?: string;
-	commit?: GitCommit | GitStashCommit;
+	commit?: GitCommit | GitLogCommit;
 	repoLog?: GitLog;
 	revealInView?: boolean;
 }
@@ -26,7 +32,7 @@ export class ShowQuickCommitCommand extends ActiveEditorCachedCommand {
 		return super.getMarkdownCommandArgsCore<ShowQuickCommitCommandArgs>(Commands.ShowQuickCommit, args);
 	}
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.RevealCommitInView, Commands.ShowQuickCommit]);
 	}
 
@@ -67,11 +73,11 @@ export class ShowQuickCommitCommand extends ActiveEditorCachedCommand {
 				args.sha = args.commit.sha;
 			}
 
-			gitUri = args.commit.getGitUri();
+			gitUri = args.commit.toGitUri();
 			repoPath = args.commit.repoPath;
 
 			if (uri == null) {
-				uri = args.commit.file?.uri;
+				uri = args.commit.uri;
 			}
 		}
 
@@ -83,7 +89,7 @@ export class ShowQuickCommitCommand extends ActiveEditorCachedCommand {
 			if (blameline < 0) return;
 
 			try {
-				const blame = await this.container.git.getBlameForLine(gitUri, blameline);
+				const blame = await Container.git.getBlameForLine(gitUri, blameline);
 				if (blame == null) {
 					void Messages.showFileNotUnderSourceControlWarningMessage('Unable to show commit');
 
@@ -110,7 +116,7 @@ export class ShowQuickCommitCommand extends ActiveEditorCachedCommand {
 		}
 
 		try {
-			if (args.commit == null || args.commit.file != null) {
+			if (args.commit == null || args.commit.isFile) {
 				if (args.repoLog != null) {
 					args.commit = args.repoLog.commits.get(args.sha);
 					// If we can't find the commit, kill the repoLog
@@ -120,7 +126,7 @@ export class ShowQuickCommitCommand extends ActiveEditorCachedCommand {
 				}
 
 				if (args.repoLog == null) {
-					args.commit = await this.container.git.getCommit(repoPath!, args.sha);
+					args.commit = await Container.git.getCommit(repoPath!, args.sha);
 				}
 			}
 
@@ -143,8 +149,8 @@ export class ShowQuickCommitCommand extends ActiveEditorCachedCommand {
 			void (await executeGitCommand({
 				command: 'show',
 				state: {
-					repo: repoPath,
-					reference: args.commit,
+					repo: repoPath!,
+					reference: args.commit as GitLogCommit,
 				},
 			}));
 		} catch (ex) {

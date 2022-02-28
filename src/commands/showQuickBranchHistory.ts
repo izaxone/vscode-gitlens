@@ -1,11 +1,10 @@
+'use strict';
 import { TextEditor, Uri } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
+import { GitReference } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitReference } from '../git/models';
-import { command } from '../system/command';
-import { ActiveEditorCachedCommand, CommandContext, getCommandUri } from './base';
-import { executeGitCommand } from './gitCommands.actions';
+import { ActiveEditorCachedCommand, command, CommandContext, Commands, getCommandUri } from './common';
+import { executeGitCommand } from './gitCommands';
 
 export interface ShowQuickBranchHistoryCommandArgs {
 	repoPath?: string;
@@ -15,7 +14,7 @@ export interface ShowQuickBranchHistoryCommandArgs {
 
 @command()
 export class ShowQuickBranchHistoryCommand extends ActiveEditorCachedCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.ShowQuickBranchHistory, Commands.ShowQuickCurrentBranchHistory]);
 	}
 
@@ -33,7 +32,7 @@ export class ShowQuickBranchHistoryCommand extends ActiveEditorCachedCommand {
 
 		const gitUri = uri != null ? await GitUri.fromUri(uri) : undefined;
 
-		const repoPath = args?.repoPath ?? gitUri?.repoPath ?? this.container.git.highlander?.path;
+		const repoPath = args?.repoPath ?? gitUri?.repoPath ?? Container.git.getHighlanderRepoPath();
 		let ref: GitReference | 'HEAD' | undefined;
 		if (repoPath != null) {
 			if (args?.branch != null) {

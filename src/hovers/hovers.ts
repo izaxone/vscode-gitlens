@@ -1,30 +1,33 @@
-import { CancellationToken, MarkdownString, TextDocument } from 'vscode';
-import { hrtime } from '@env/hrtime';
+'use strict';
+import { MarkdownString } from 'vscode';
 import { DiffWithCommand, ShowQuickCommitCommand } from '../commands';
 import { GlyphChars } from '../constants';
 import { Container } from '../container';
-import { CommitFormatter } from '../git/formatters';
+import {
+	CommitFormatter,
+	GitBlameCommit,
+	GitCommit,
+	GitDiffHunk,
+	GitDiffHunkLine,
+	GitLogCommit,
+	GitRemote,
+	GitRevision,
+	PullRequest,
+} from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitCommit, GitDiffHunk, GitDiffHunkLine, GitRemote, GitRevision, PullRequest } from '../git/models';
-import { Logger, LogLevel } from '../logger';
-import { count } from '../system/iterable';
-import { PromiseCancelledError } from '../system/promise';
-import { getDurationMilliseconds } from '../system/string';
+import { Logger } from '../logger';
+import { Iterables, Promises, Strings } from '../system';
 
 export namespace Hovers {
 	export async function changesMessage(
-		commit: GitCommit,
+		commit: GitBlameCommit | GitLogCommit,
 		uri: GitUri,
-		editorLine: number, // 0-based, Git is 1-based
-		document: TextDocument,
+		editorLine: number,
 	): Promise<MarkdownString | undefined> {
 		const documentRef = uri.sha;
 
-		let previousSha = null;
-
-		async function getDiff() {
-			if (commit.file == null) return undefined;
-
+		let hunkLine;
+		if (GitBlameCommit.is(commit)) {
 			// TODO: Figure out how to optimize this
 			let ref;
 			if (commit.isUncommitted) {
@@ -32,122 +35,110 @@ export namespace Hovers {
 					ref = documentRef;
 				}
 			} else {
-				previousSha = await commit.getPreviousSha();
-				ref = previousSha;
-				if (ref == null) {
-					return `\`\`\`diff\n+ ${document.lineAt(editorLine).text}\n\`\`\``;
-				}
+				ref = commit.previousSha;
 			}
 
 			const line = editorLine + 1;
 			const commitLine = commit.lines.find(l => l.line === line) ?? commit.lines[0];
 
-			let originalPath = commit.file.originalPath;
-			if (originalPath == null) {
-				if (uri.fsPath !== commit.file.uri.fsPath) {
-					originalPath = commit.file.path;
+			let originalFileName = commit.originalFileName;
+			if (originalFileName == null) {
+				if (uri.fsPath !== commit.uri.fsPath) {
+					originalFileName = commit.fileName;
 				}
 			}
 
 			editorLine = commitLine.line - 1;
 			// TODO: Doesn't work with dirty files -- pass in editor? or contents?
-			let hunkLine = await Container.instance.git.getDiffForLine(uri, editorLine, ref, documentRef);
+			hunkLine = await Container.git.getDiffForLine(uri, editorLine, ref, documentRef, originalFileName);
 
 			// If we didn't find a diff & ref is undefined (meaning uncommitted), check for a staged diff
-			if (hunkLine == null && ref == null && documentRef !== GitRevision.uncommittedStaged) {
-				hunkLine = await Container.instance.git.getDiffForLine(
+			if (hunkLine == null && ref == null) {
+				hunkLine = await Container.git.getDiffForLine(
 					uri,
 					editorLine,
 					undefined,
 					GitRevision.uncommittedStaged,
+					originalFileName,
 				);
 			}
-
-			return hunkLine != null ? getDiffFromHunkLine(hunkLine) : undefined;
 		}
 
-		const diff = await getDiff();
-		if (diff == null) return undefined;
+		if (hunkLine == null || commit.previousSha == null) return undefined;
+
+		const diff = getDiffFromHunkLine(hunkLine);
 
 		let message;
 		let previous;
 		let current;
 		if (commit.isUncommitted) {
-			const compareUris = await commit.getPreviousComparisonUrisForLine(editorLine, documentRef);
-			if (compareUris?.previous == null) return undefined;
+			const diffUris = await commit.getPreviousLineDiffUris(uri, editorLine, documentRef);
+			if (diffUris == null || diffUris.previous == null) {
+				return undefined;
+			}
 
 			message = `[$(compare-changes)](${DiffWithCommand.getMarkdownCommandArgs({
 				lhs: {
-					sha: compareUris.previous.sha ?? '',
-					uri: compareUris.previous.documentUri(),
+					sha: diffUris.previous.sha ?? '',
+					uri: diffUris.previous.documentUri(),
 				},
 				rhs: {
-					sha: compareUris.current.sha ?? '',
-					uri: compareUris.current.documentUri(),
+					sha: diffUris.current.sha ?? '',
+					uri: diffUris.current.documentUri(),
 				},
 				repoPath: commit.repoPath,
 				line: editorLine,
 			})} "Open Changes")`;
 
 			previous =
-				compareUris.previous.sha == null || compareUris.previous.isUncommitted
-					? `  &nbsp;_${GitRevision.shorten(compareUris.previous.sha, {
-							strings: { working: 'Working Tree' },
-					  })}_ &nbsp;${GlyphChars.ArrowLeftRightLong}&nbsp; `
-					: `  &nbsp;[$(git-commit) ${GitRevision.shorten(
-							compareUris.previous.sha || '',
-					  )}](${ShowQuickCommitCommand.getMarkdownCommandArgs(
-							compareUris.previous.sha || '',
-					  )} "Show Commit") &nbsp;${GlyphChars.ArrowLeftRightLong}&nbsp; `;
-
-			current =
-				compareUris.current.sha == null || compareUris.current.isUncommitted
-					? `_${GitRevision.shorten(compareUris.current.sha, {
+				diffUris.previous.sha == null || diffUris.previous.isUncommitted
+					? `_${GitRevision.shorten(diffUris.previous.sha, {
 							strings: {
 								working: 'Working Tree',
 							},
 					  })}_`
 					: `[$(git-commit) ${GitRevision.shorten(
-							compareUris.current.sha || '',
-					  )}](${ShowQuickCommitCommand.getMarkdownCommandArgs(
-							compareUris.current.sha || '',
-					  )} "Show Commit")`;
+							diffUris.previous.sha || '',
+					  )}](${ShowQuickCommitCommand.getMarkdownCommandArgs(diffUris.previous.sha || '')} "Show Commit")`;
+
+			current =
+				diffUris.current.sha == null || diffUris.current.isUncommitted
+					? `_${GitRevision.shorten(diffUris.current.sha, {
+							strings: {
+								working: 'Working Tree',
+							},
+					  })}_`
+					: `[$(git-commit) ${GitRevision.shorten(
+							diffUris.current.sha || '',
+					  )}](${ShowQuickCommitCommand.getMarkdownCommandArgs(diffUris.current.sha || '')} "Show Commit")`;
 		} else {
 			message = `[$(compare-changes)](${DiffWithCommand.getMarkdownCommandArgs(
 				commit,
 				editorLine,
 			)} "Open Changes")`;
 
-			if (previousSha === null) {
-				previousSha = await commit.getPreviousSha();
-			}
-			if (previousSha) {
-				previous = `  &nbsp;[$(git-commit) ${GitRevision.shorten(
-					previousSha,
-				)}](${ShowQuickCommitCommand.getMarkdownCommandArgs(previousSha)} "Show Commit") &nbsp;${
-					GlyphChars.ArrowLeftRightLong
-				}&nbsp;`;
-			}
+			previous = `[$(git-commit) ${commit.previousShortSha}](${ShowQuickCommitCommand.getMarkdownCommandArgs(
+				commit.previousSha,
+			)} "Show Commit")`;
 
 			current = `[$(git-commit) ${commit.shortSha}](${ShowQuickCommitCommand.getMarkdownCommandArgs(
 				commit.sha,
 			)} "Show Commit")`;
 		}
 
-		message = `${diff}\n---\n\nChanges${previous ?? ' added in '}${current} &nbsp;&nbsp;|&nbsp;&nbsp; ${message}`;
+		message = `${diff}\n---\n\nChanges  &nbsp;${previous} &nbsp;${GlyphChars.ArrowLeftRightLong}&nbsp; ${current} &nbsp;&nbsp;|&nbsp;&nbsp; ${message}`;
 
 		const markdown = new MarkdownString(message, true);
-		markdown.supportHtml = true;
 		markdown.isTrusted = true;
 		return markdown;
 	}
 
-	export async function localChangesMessage(
-		fromCommit: GitCommit | undefined,
+	export function localChangesMessage(
+		fromCommit: GitLogCommit | undefined,
 		uri: GitUri,
-		editorLine: number, // 0-based, Git is 1-based
+		editorLine: number,
 		hunk: GitDiffHunk,
-	): Promise<MarkdownString | undefined> {
+	): MarkdownString {
 		const diff = getDiffFromHunk(hunk);
 
 		let message;
@@ -157,8 +148,7 @@ export namespace Hovers {
 			previous = '_Working Tree_';
 			current = '_Unsaved_';
 		} else {
-			const file = await fromCommit.findFile(uri);
-			if (file == null) return undefined;
+			const file = fromCommit.findFile(uri.fsPath)!;
 
 			message = `[$(compare-changes)](${DiffWithCommand.getMarkdownCommandArgs({
 				lhs: {
@@ -184,7 +174,6 @@ export namespace Hovers {
 		}&nbsp; ${current}${message == null ? '' : ` &nbsp;&nbsp;|&nbsp;&nbsp; ${message}`}`;
 
 		const markdown = new MarkdownString(message, true);
-		markdown.supportHtml = true;
 		markdown.isTrusted = true;
 		return markdown;
 	}
@@ -192,15 +181,14 @@ export namespace Hovers {
 	export async function detailsMessage(
 		commit: GitCommit,
 		uri: GitUri,
-		editorLine: number, // 0-based, Git is 1-based
+		editorLine: number,
 		format: string,
 		dateFormat: string | null,
 		options?: {
 			autolinks?: boolean;
-			cancellationToken?: CancellationToken;
 			pullRequests?: {
 				enabled: boolean;
-				pr?: PullRequest | PromiseCancelledError<Promise<PullRequest | undefined>>;
+				pr?: PullRequest | Promises.CancellationError<Promise<PullRequest | undefined>>;
 			};
 			getBranchAndTagTips?: (
 				sha: string,
@@ -212,21 +200,11 @@ export namespace Hovers {
 			dateFormat = 'MMMM Do, YYYY h:mma';
 		}
 
-		let message = commit.message ?? commit.summary;
-		if (commit.message == null && !commit.isUncommitted) {
-			await commit.ensureFullDetails();
-			message = commit.message ?? commit.summary;
+		const remotes = await Container.git.getRemotes(commit.repoPath, { sort: true });
 
-			if (options?.cancellationToken?.isCancellationRequested) return new MarkdownString();
-		}
-
-		const remotes = await Container.instance.git.getRemotesWithProviders(commit.repoPath, { sort: true });
-
-		if (options?.cancellationToken?.isCancellationRequested) return new MarkdownString();
-
-		const [previousLineComparisonUris, autolinkedIssuesOrPullRequests, pr, presence] = await Promise.all([
-			commit.isUncommitted ? commit.getPreviousComparisonUrisForLine(editorLine, uri.sha) : undefined,
-			getAutoLinkedIssuesOrPullRequests(message, remotes),
+		const [previousLineDiffUris, autolinkedIssuesOrPullRequests, pr, presence] = await Promise.all([
+			commit.isUncommitted ? commit.getPreviousLineDiffUris(uri, editorLine, uri.sha) : undefined,
+			getAutoLinkedIssuesOrPullRequests(commit.message, remotes),
 			options?.pullRequests?.pr ??
 				getPullRequestForCommit(commit.ref, remotes, {
 					pullRequests:
@@ -240,10 +218,8 @@ export namespace Hovers {
 							'pullRequestState',
 						),
 				}),
-			Container.instance.vsls.maybeGetPresence(commit.author.email),
+			Container.vsls.maybeGetPresence(commit.email),
 		]);
-
-		if (options?.cancellationToken?.isCancellationRequested) return new MarkdownString();
 
 		const details = await CommitFormatter.fromTemplateAsync(format, commit, {
 			autolinkedIssuesOrPullRequests: autolinkedIssuesOrPullRequests,
@@ -257,12 +233,11 @@ export namespace Hovers {
 			messageAutolinks: options?.autolinks,
 			pullRequestOrRemote: pr,
 			presence: presence,
-			previousLineComparisonUris: previousLineComparisonUris,
+			previousLineDiffUris: previousLineDiffUris,
 			remotes: remotes,
 		});
 
 		const markdown = new MarkdownString(details, true);
-		markdown.supportHtml = true;
 		markdown.isTrusted = true;
 		return markdown;
 	}
@@ -272,7 +247,7 @@ export namespace Hovers {
 	}
 
 	function getDiffFromHunkLine(hunkLine: GitDiffHunkLine, diffStyle?: 'line' | 'hunk'): string {
-		if (diffStyle === 'hunk' || (diffStyle == null && Container.instance.config.hovers.changesDiff === 'hunk')) {
+		if (diffStyle === 'hunk' || (diffStyle == null && Container.config.hovers.changesDiff === 'hunk')) {
 			return getDiffFromHunk(hunkLine.hunk);
 		}
 
@@ -282,24 +257,24 @@ export namespace Hovers {
 	}
 
 	async function getAutoLinkedIssuesOrPullRequests(message: string, remotes: GitRemote[]) {
-		const cc = Logger.getNewCorrelationContext('Hovers.getAutoLinkedIssuesOrPullRequests');
+		const cc = Logger.getNewCorrelationContext('Hovers.getAutoLinkedIssues');
 		Logger.debug(cc, `${GlyphChars.Dash} message=<message>`);
 
-		const start = hrtime();
+		const start = process.hrtime();
 
 		if (
-			!Container.instance.config.hovers.autolinks.enabled ||
-			!Container.instance.config.hovers.autolinks.enhanced ||
-			!CommitFormatter.has(Container.instance.config.hovers.detailsMarkdownFormat, 'message')
+			!Container.config.hovers.autolinks.enabled ||
+			!Container.config.hovers.autolinks.enhanced ||
+			!CommitFormatter.has(Container.config.hovers.detailsMarkdownFormat, 'message')
 		) {
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return undefined;
 		}
 
-		const remote = await Container.instance.git.getRichRemoteProvider(remotes);
+		const remote = await Container.git.getRichRemoteProvider(remotes);
 		if (remote?.provider == null) {
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return undefined;
 		}
@@ -308,26 +283,26 @@ export namespace Hovers {
 		const timeout = 250;
 
 		try {
-			const autolinks = await Container.instance.autolinks.getIssueOrPullRequestLinks(message, remote, {
+			const autolinks = await Container.autolinks.getIssueOrPullRequestLinks(message, remote, {
 				timeout: timeout,
 			});
 
-			if (autolinks != null && Logger.enabled(LogLevel.Debug)) {
+			if (autolinks != null && Logger.willLog('debug')) {
 				// If there are any issues/PRs that timed out, log it
-				const prCount = count(autolinks.values(), pr => pr instanceof PromiseCancelledError);
-				if (prCount !== 0) {
+				const count = Iterables.count(autolinks.values(), pr => pr instanceof Promises.CancellationError);
+				if (count !== 0) {
 					Logger.debug(
 						cc,
 						`timed out ${
 							GlyphChars.Dash
-						} ${prCount} issue/pull request queries took too long (over ${timeout} ms) ${
+						} ${count} issue/pull request queries took too long (over ${timeout} ms) ${
 							GlyphChars.Dot
-						} ${getDurationMilliseconds(start)} ms`,
+						} ${Strings.getDurationMilliseconds(start)} ms`,
 					);
 
 					// const pending = [
 					// 	...Iterables.map(autolinks.values(), issueOrPullRequest =>
-					// 		issueOrPullRequest instanceof CancelledPromiseError
+					// 		issueOrPullRequest instanceof Promises.CancellationError
 					// 			? issueOrPullRequest.promise
 					// 			: undefined,
 					// 	),
@@ -337,18 +312,18 @@ export namespace Hovers {
 					// 		cc,
 					// 		`${GlyphChars.Dot} ${count} issue/pull request queries completed; refreshing...`,
 					// 	);
-					// 	void executeCoreCommand(CoreCommands.EditorShowHover);
+					// 	void commands.executeCommand('editor.action.showHover');
 					// });
 
 					return autolinks;
 				}
 			}
 
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return autolinks;
 		} catch (ex) {
-			Logger.error(ex, cc, `failed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.error(ex, cc, `failed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return undefined;
 		}
@@ -364,17 +339,17 @@ export namespace Hovers {
 		const cc = Logger.getNewCorrelationContext('Hovers.getPullRequestForCommit');
 		Logger.debug(cc, `${GlyphChars.Dash} ref=${ref}`);
 
-		const start = hrtime();
+		const start = process.hrtime();
 
 		if (!options?.pullRequests) {
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return undefined;
 		}
 
-		const remote = await Container.instance.git.getRichRemoteProvider(remotes, { includeDisconnected: true });
+		const remote = await Container.git.getRichRemoteProvider(remotes, { includeDisconnected: true });
 		if (remote?.provider == null) {
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return undefined;
 		}
@@ -382,25 +357,25 @@ export namespace Hovers {
 		const { provider } = remote;
 		const connected = provider.maybeConnected ?? (await provider.isConnected());
 		if (!connected) {
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return remote;
 		}
 
 		try {
-			const pr = await Container.instance.git.getPullRequestForCommit(ref, provider, { timeout: 250 });
+			const pr = await Container.git.getPullRequestForCommit(ref, provider, { timeout: 250 });
 
-			Logger.debug(cc, `completed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.debug(cc, `completed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return pr;
 		} catch (ex) {
-			if (ex instanceof PromiseCancelledError) {
-				Logger.debug(cc, `timed out ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			if (ex instanceof Promises.CancellationError) {
+				Logger.debug(cc, `timed out ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 				return ex;
 			}
 
-			Logger.error(ex, cc, `failed ${GlyphChars.Dot} ${getDurationMilliseconds(start)} ms`);
+			Logger.error(ex, cc, `failed ${GlyphChars.Dot} ${Strings.getDurationMilliseconds(start)} ms`);
 
 			return undefined;
 		}

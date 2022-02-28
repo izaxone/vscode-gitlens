@@ -1,4 +1,5 @@
-import { GitBranchReference, GitRevisionReference } from './reference';
+'use strict';
+import { GitBranchReference, GitRevisionReference } from './models';
 
 export interface GitRebaseStatus {
 	type: 'rebase';

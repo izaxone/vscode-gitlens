@@ -1,16 +1,15 @@
-import { Commands, CoreCommands } from '../constants';
-import type { Container } from '../container';
-import { command, executeCoreCommand } from '../system/command';
-import { Command } from './base';
+'use strict';
+import { commands } from 'vscode';
+import { command, Command, Commands } from './common';
 
 @command()
 export class RefreshHoverCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.RefreshHover);
 	}
 
 	async execute() {
 		// TODO@eamodio figure out how to really refresh/update a hover
-		await executeCoreCommand(CoreCommands.EditorShowHover);
+		await commands.executeCommand('editor.action.showHover');
 	}
 }

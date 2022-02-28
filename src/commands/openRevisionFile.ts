@@ -1,14 +1,12 @@
+'use strict';
 import { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
 import { FileAnnotationType } from '../configuration';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
 import { GitUri } from '../git/gitUri';
-import { GitRevision } from '../git/models';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command } from '../system/command';
-import { ActiveEditorCommand, getCommandUri } from './base';
-import { GitActions } from './gitCommands.actions';
+import { ActiveEditorCommand, command, Commands, getCommandUri } from './common';
+import { GitActions } from './gitCommands';
 
 export interface OpenRevisionFileCommandArgs {
 	revisionUri?: Uri;
@@ -20,7 +18,7 @@ export interface OpenRevisionFileCommandArgs {
 
 @command()
 export class OpenRevisionFileCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.OpenRevisionFile, Commands.OpenRevisionFileInDiffLeft, Commands.OpenRevisionFileInDiffRight]);
 	}
 
@@ -38,18 +36,14 @@ export class OpenRevisionFileCommand extends ActiveEditorCommand {
 		try {
 			if (args.revisionUri == null) {
 				if (gitUri?.sha) {
-					const commit = await this.container.git.getCommit(gitUri.repoPath!, gitUri.sha);
+					const commit = await Container.git.getCommit(gitUri.repoPath!, gitUri.sha);
 
 					args.revisionUri =
-						commit?.file?.status === 'D'
-							? this.container.git.getRevisionUri(
-									(await commit.getPreviousSha()) ?? GitRevision.deletedOrMissing,
-									commit.file,
-									commit.repoPath,
-							  )
-							: this.container.git.getRevisionUri(gitUri);
+						commit != null && commit.status === 'D'
+							? GitUri.toRevisionUri(commit.previousSha!, commit.previousUri.fsPath, commit.repoPath)
+							: GitUri.toRevisionUri(gitUri);
 				} else {
-					args.revisionUri = this.container.git.getRevisionUri(gitUri);
+					args.revisionUri = GitUri.toRevisionUri(gitUri);
 				}
 			}
 

@@ -1,11 +1,9 @@
+'use strict';
 import { GlyphChars } from '../../constants';
 import { Container } from '../../container';
-import { GitBranchReference, GitReference, Repository } from '../../git/models';
-import { FlagsQuickPickItem } from '../../quickpicks/items/flags';
-import { isStringArray } from '../../system/array';
-import { fromNow } from '../../system/date';
-import { pad } from '../../system/string';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
+import { GitBranchReference, GitReference, Repository } from '../../git/git';
+import { FlagsQuickPickItem } from '../../quickpicks';
+import { Arrays, Dates, Strings } from '../../system';
 import {
 	appendReposToTitle,
 	AsyncStepResultGenerator,
@@ -21,7 +19,6 @@ import {
 
 interface Context {
 	repos: Repository[];
-	associatedView: ViewsWithRepositoryFolders;
 	title: string;
 }
 
@@ -42,8 +39,8 @@ export interface FetchGitCommandArgs {
 type FetchStepState<T extends State = State> = ExcludeSome<StepState<T>, 'repos', string | string[] | Repository>;
 
 export class FetchGitCommand extends QuickCommand<State> {
-	constructor(container: Container, args?: FetchGitCommandArgs) {
-		super(container, 'fetch', 'fetch', 'Fetch', { description: 'fetches changes from one or more remotes' });
+	constructor(args?: FetchGitCommandArgs) {
+		super('fetch', 'fetch', 'Fetch', { description: 'fetches changes from one or more remotes' });
 
 		let counter = 0;
 		if (args?.state?.repos != null && (!Array.isArray(args.state.repos) || args.state.repos.length !== 0)) {
@@ -62,7 +59,7 @@ export class FetchGitCommand extends QuickCommand<State> {
 			return state.repos[0].fetch({ branch: state.reference });
 		}
 
-		return this.container.git.fetchAll(state.repos, {
+		return Container.git.fetchAll(state.repos, {
 			all: state.flags.includes('--all'),
 			prune: state.flags.includes('--prune'),
 		});
@@ -70,8 +67,7 @@ export class FetchGitCommand extends QuickCommand<State> {
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
-			associatedView: this.container.commitsView,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			title: this.title,
 		};
 
@@ -80,7 +76,7 @@ export class FetchGitCommand extends QuickCommand<State> {
 		}
 
 		if (state.repos != null && !Array.isArray(state.repos)) {
-			state.repos = [state.repos as string];
+			state.repos = [state.repos as any];
 		}
 
 		let skippedStepOne = false;
@@ -88,7 +84,12 @@ export class FetchGitCommand extends QuickCommand<State> {
 		while (this.canStepsContinue(state)) {
 			context.title = this.title;
 
-			if (state.counter < 1 || state.repos == null || state.repos.length === 0 || isStringArray(state.repos)) {
+			if (
+				state.counter < 1 ||
+				state.repos == null ||
+				state.repos.length === 0 ||
+				Arrays.isStringArray(state.repos)
+			) {
 				skippedStepOne = false;
 				if (context.repos.length === 1) {
 					skippedStepOne = true;
@@ -134,7 +135,9 @@ export class FetchGitCommand extends QuickCommand<State> {
 		if (state.repos.length === 1) {
 			const lastFetched = await state.repos[0].getLastFetched();
 			if (lastFetched !== 0) {
-				lastFetchedOn = `${pad(GlyphChars.Dot, 2, 2)}Last fetched ${fromNow(new Date(lastFetched))}`;
+				lastFetchedOn = `${Strings.pad(GlyphChars.Dot, 2, 2)}Last fetched ${Dates.getFormatter(
+					new Date(lastFetched),
+				).fromNow()}`;
 			}
 		}
 

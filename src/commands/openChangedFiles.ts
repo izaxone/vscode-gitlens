@@ -1,13 +1,10 @@
+'use strict';
 import { Uri, window } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { filterMap } from '../system/array';
-import { command } from '../system/command';
-import { findOrOpenEditors } from '../system/utils';
-import { Command } from './base';
+import { Arrays } from '../system';
+import { Command, command, Commands, findOrOpenEditors, getRepoPathOrPrompt } from './common';
 
 export interface OpenChangedFilesCommandArgs {
 	uris?: Uri[];
@@ -15,7 +12,7 @@ export interface OpenChangedFilesCommandArgs {
 
 @command()
 export class OpenChangedFilesCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.OpenChangedFiles);
 	}
 
@@ -24,17 +21,17 @@ export class OpenChangedFilesCommand extends Command {
 
 		try {
 			if (args.uris == null) {
-				const repository = await RepositoryPicker.getRepositoryOrShow('Open All Changed Files');
-				if (repository == null) return;
+				const repoPath = await getRepoPathOrPrompt('Open All Changed Files');
+				if (!repoPath) return;
 
-				const status = await this.container.git.getStatusForRepo(repository.uri);
+				const status = await Container.git.getStatusForRepo(repoPath);
 				if (status == null) {
 					void window.showWarningMessage('Unable to open changed files');
 
 					return;
 				}
 
-				args.uris = filterMap(status.files, f => (f.status !== 'D' ? f.uri : undefined));
+				args.uris = Arrays.filterMap(status.files, f => (f.status !== 'D' ? f.uri : undefined));
 			}
 
 			findOrOpenEditors(args.uris);

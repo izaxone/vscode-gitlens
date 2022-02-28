@@ -1,5 +1,10 @@
+'use strict';
+import { randomBytes } from 'crypto';
+import { TextDecoder } from 'util';
 import {
 	commands,
+	ConfigurationChangeEvent,
+	ConfigurationTarget,
 	Disposable,
 	Uri,
 	ViewColumn,
@@ -9,18 +14,20 @@ import {
 	window,
 	workspace,
 } from 'vscode';
-import { getNonce } from '@env/crypto';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Commands } from '../commands';
+import { configuration } from '../configuration';
+import { Container } from '../container';
+import { CommitFormatter, GitBlameCommit, PullRequest, PullRequestState } from '../git/git';
 import { Logger } from '../logger';
-import { executeCommand } from '../system/command';
 import {
-	ExecuteCommandType,
+	DidChangeConfigurationNotificationType,
+	DidPreviewConfigurationNotificationType,
 	IpcMessage,
-	IpcMessageParams,
+	IpcNotificationParamsOf,
 	IpcNotificationType,
-	onIpc,
-	WebviewReadyCommandType,
+	onIpcCommand,
+	PreviewConfigurationCommandType,
+	UpdateConfigurationCommandType,
 } from './protocol';
 
 let ipcSequence = 0;
@@ -34,38 +41,236 @@ function nextIpcId() {
 	return `host:${ipcSequence}`;
 }
 
-export abstract class WebviewBase<State> implements Disposable {
-	protected readonly disposables: Disposable[] = [];
-	protected isReady: boolean = false;
+const emptyCommands: Disposable[] = [
+	{
+		dispose: function () {
+			/* noop */
+		},
+	},
+];
+
+export abstract class WebviewBase implements Disposable {
+	protected disposable: Disposable;
 	private _disposablePanel: Disposable | undefined;
 	private _panel: WebviewPanel | undefined;
 
-	constructor(
-		protected readonly container: Container,
-		public readonly id: `gitlens.${string}`,
-		private readonly fileName: string,
-		private readonly iconPath: string,
-		title: string,
-		showCommand: Commands,
-	) {
-		this._title = title;
-		this.disposables.push(commands.registerCommand(showCommand, this.onShowCommand, this));
+	constructor(showCommand: Commands, private readonly _column?: ViewColumn) {
+		this.disposable = Disposable.from(
+			configuration.onDidChange(this.onConfigurationChanged, this),
+			configuration.onDidChangeAny(this.onAnyConfigurationChanged, this),
+			commands.registerCommand(showCommand, this.onShowCommand, this),
+		);
 	}
 
+	abstract get filename(): string;
+	abstract get id(): string;
+	abstract get title(): string;
+
+	registerCommands(): Disposable[] {
+		return emptyCommands;
+	}
+
+	renderHead?(): string | Promise<string>;
+	renderBody?(): string | Promise<string>;
+	renderEndOfBody?(): string | Promise<string>;
+
 	dispose() {
-		this.disposables.forEach(d => d.dispose());
+		this.disposable.dispose();
 		this._disposablePanel?.dispose();
 	}
 
-	private _title: string;
-	get title(): string {
-		return this._panel?.title ?? this._title;
+	private _customSettings:
+		| Map<
+				string,
+				{
+					name: string;
+					enabled: () => boolean;
+					update: (enabled: boolean) => Promise<void>;
+				}
+		  >
+		| undefined;
+	private get customSettings() {
+		if (this._customSettings == null) {
+			this._customSettings = new Map<
+				string,
+				{
+					name: string;
+					enabled: () => boolean;
+					update: (enabled: boolean) => Promise<void>;
+				}
+			>([
+				[
+					'rebaseEditor.enabled',
+					{
+						name: 'workbench.editorAssociations',
+						enabled: () => Container.rebaseEditor.enabled,
+						update: Container.rebaseEditor.setEnabled,
+					},
+				],
+			]);
+		}
+		return this._customSettings;
 	}
-	set title(title: string) {
-		this._title = title;
-		if (this._panel == null) return;
 
-		this._panel.title = title;
+	protected onShowCommand() {
+		void this.show(this._column);
+	}
+
+	private onAnyConfigurationChanged(e: ConfigurationChangeEvent) {
+		let notify = false;
+		for (const setting of this.customSettings.values()) {
+			if (e.affectsConfiguration(setting.name)) {
+				notify = true;
+				break;
+			}
+		}
+
+		if (!notify) return;
+
+		void this.notifyDidChangeConfiguration();
+	}
+
+	private onConfigurationChanged(_e: ConfigurationChangeEvent) {
+		void this.notifyDidChangeConfiguration();
+	}
+
+	private onPanelDisposed() {
+		this._disposablePanel?.dispose();
+		this._panel = undefined;
+	}
+
+	private onViewStateChanged(e: WebviewPanelOnDidChangeViewStateEvent) {
+		Logger.log(
+			`Webview(${this.id}).onViewStateChanged`,
+			`active=${e.webviewPanel.active}, visible=${e.webviewPanel.visible}`,
+		);
+
+		// Anytime the webview becomes active, make sure it has the most up-to-date config
+		if (e.webviewPanel.active) {
+			void this.notifyDidChangeConfiguration();
+		}
+	}
+
+	protected onMessageReceived(e: IpcMessage) {
+		switch (e.method) {
+			case UpdateConfigurationCommandType.method:
+				onIpcCommand(UpdateConfigurationCommandType, e, async params => {
+					const target =
+						params.scope === 'workspace' ? ConfigurationTarget.Workspace : ConfigurationTarget.Global;
+
+					for (const key in params.changes) {
+						let value = params.changes[key];
+
+						const customSetting = this.customSettings.get(key);
+						if (customSetting != null) {
+							await customSetting.update(value);
+
+							continue;
+						}
+
+						const inspect = configuration.inspect(key as any)!;
+
+						if (value != null) {
+							if (params.scope === 'workspace') {
+								if (value === inspect.workspaceValue) continue;
+							} else {
+								if (value === inspect.globalValue && value !== inspect.defaultValue) continue;
+
+								if (value === inspect.defaultValue) {
+									value = undefined;
+								}
+							}
+						}
+
+						void (await configuration.update(key as any, value, target));
+					}
+
+					for (const key of params.removes) {
+						void (await configuration.update(key as any, undefined, target));
+					}
+				});
+
+				break;
+
+			case PreviewConfigurationCommandType.method:
+				onIpcCommand(PreviewConfigurationCommandType, e, async params => {
+					switch (params.type) {
+						case 'commit': {
+							const commit = new GitBlameCommit(
+								'~/code/eamodio/vscode-gitlens-demo',
+								'fe26af408293cba5b4bfd77306e1ac9ff7ccaef8',
+								'You',
+								'eamodio@gmail.com',
+								new Date('2016-11-12T20:41:00.000Z'),
+								new Date('2020-11-01T06:57:21.000Z'),
+								'Supercharged',
+								'code.ts',
+								undefined,
+								'3ac1d3f51d7cf5f438cc69f25f6740536ad80fef',
+								'code.ts',
+								[],
+							);
+
+							let includePullRequest = false;
+							switch (params.key) {
+								case configuration.name('currentLine.format'):
+									includePullRequest = Container.config.currentLine.pullRequests.enabled;
+									break;
+								case configuration.name('statusBar.format'):
+									includePullRequest = Container.config.statusBar.pullRequests.enabled;
+									break;
+							}
+
+							let pr: PullRequest | undefined;
+							if (includePullRequest) {
+								pr = new PullRequest(
+									{ id: 'github', name: 'GitHub', domain: 'github.com' },
+									{
+										name: 'Eric Amodio',
+										avatarUrl: 'https://avatars1.githubusercontent.com/u/641685?s=32&v=4',
+										url: 'https://github.com/eamodio',
+									},
+									'1',
+									'Supercharged',
+									'https://github.com/eamodio/vscode-gitlens/pulls/1',
+									PullRequestState.Merged,
+									new Date('Sat, 12 Nov 2016 19:41:00 GMT'),
+									undefined,
+									new Date('Sat, 12 Nov 2016 20:41:00 GMT'),
+								);
+							}
+
+							let preview;
+							try {
+								preview = CommitFormatter.fromTemplate(params.format, commit, {
+									dateFormat: Container.config.defaultDateFormat,
+									pullRequestOrRemote: pr,
+									messageTruncateAtNewLine: true,
+								});
+							} catch {
+								preview = 'Invalid format';
+							}
+
+							await this.notify(DidPreviewConfigurationNotificationType, {
+								id: params.id,
+								preview: preview,
+							});
+						}
+					}
+				});
+				break;
+
+			default:
+				break;
+		}
+	}
+
+	private onMessageReceivedCore(e: IpcMessage) {
+		if (e == null) return;
+
+		Logger.log(`Webview(${this.id}).onMessageReceived: method=${e.method}, data=${JSON.stringify(e)}`);
+
+		this.onMessageReceived(e);
 	}
 
 	get visible() {
@@ -76,11 +281,17 @@ export abstract class WebviewBase<State> implements Disposable {
 		this._panel?.dispose();
 	}
 
+	setTitle(title: string) {
+		if (this._panel == null) return;
+
+		this._panel.title = title;
+	}
+
 	async show(column: ViewColumn = ViewColumn.Beside): Promise<void> {
 		if (this._panel == null) {
 			this._panel = window.createWebviewPanel(
 				this.id,
-				this._title,
+				this.title,
 				{ viewColumn: column, preserveFocus: false },
 				{
 					retainContextWhenHidden: true,
@@ -90,14 +301,13 @@ export abstract class WebviewBase<State> implements Disposable {
 				},
 			);
 
-			this._panel.iconPath = Uri.file(this.container.context.asAbsolutePath(this.iconPath));
+			this._panel.iconPath = Uri.file(Container.context.asAbsolutePath('images/gitlens-icon.png'));
 			this._disposablePanel = Disposable.from(
 				this._panel,
 				this._panel.onDidDispose(this.onPanelDisposed, this),
 				this._panel.onDidChangeViewState(this.onViewStateChanged, this),
 				this._panel.webview.onDidReceiveMessage(this.onMessageReceivedCore, this),
-				...(this.onInitializing?.() ?? []),
-				...(this.registerCommands?.() ?? []),
+				...this.registerCommands(),
 			);
 
 			this._panel.webview.html = await this.getHtml(this._panel.webview);
@@ -112,94 +322,19 @@ export abstract class WebviewBase<State> implements Disposable {
 		}
 	}
 
-	protected onInitializing?(): Disposable[] | undefined;
-	protected onReady?(): void;
-	protected onMessageReceived?(e: IpcMessage): void;
-	protected onFocusChanged?(focused: boolean): void;
-	protected onVisibilityChanged?(visible: boolean): void;
-
-	protected registerCommands?(): Disposable[];
-
-	protected includeBootstrap?(): State | Promise<State>;
-	protected includeHead?(): string | Promise<string>;
-	protected includeBody?(): string | Promise<string>;
-	protected includeEndOfBody?(): string | Promise<string>;
-
-	protected async refresh(): Promise<void> {
-		if (this._panel == null) return;
-
-		this._panel.webview.html = await this.getHtml(this._panel.webview);
-	}
-
-	private onPanelDisposed() {
-		this.onVisibilityChanged?.(false);
-		this.onFocusChanged?.(false);
-
-		this._disposablePanel?.dispose();
-		this._disposablePanel = undefined;
-		this._panel = undefined;
-	}
-
-	protected onShowCommand(): void {
-		void this.show();
-	}
-
-	protected onViewStateChanged(e: WebviewPanelOnDidChangeViewStateEvent): void {
-		Logger.debug(
-			`Webview(${this.id}).onViewStateChanged`,
-			`active=${e.webviewPanel.active}, visible=${e.webviewPanel.visible}`,
-		);
-		this.onVisibilityChanged?.(e.webviewPanel.visible);
-		this.onFocusChanged?.(e.webviewPanel.active);
-	}
-
-	protected onMessageReceivedCore(e: IpcMessage) {
-		if (e == null) return;
-
-		Logger.debug(`Webview(${this.id}).onMessageReceived: method=${e.method}`);
-
-		switch (e.method) {
-			case WebviewReadyCommandType.method:
-				onIpc(WebviewReadyCommandType, e, () => {
-					this.isReady = true;
-					this.onReady?.();
-				});
-
-				break;
-
-			case ExecuteCommandType.method:
-				onIpc(ExecuteCommandType, e, params => {
-					if (params.args != null) {
-						void executeCommand(params.command as Commands, ...params.args);
-					} else {
-						void executeCommand(params.command as Commands);
-					}
-				});
-				break;
-
-			default:
-				this.onMessageReceived?.(e);
-				break;
-		}
-	}
-
 	private async getHtml(webview: Webview): Promise<string> {
-		const webRootUri = Uri.joinPath(this.container.context.extensionUri, 'dist', 'webviews');
-		const uri = Uri.joinPath(webRootUri, this.fileName);
+		const uri = Uri.joinPath(Container.context.extensionUri, 'dist', 'webviews', this.filename);
 		const content = new TextDecoder('utf8').decode(await workspace.fs.readFile(uri));
 
-		const [bootstrap, head, body, endOfBody] = await Promise.all([
-			this.includeBootstrap?.(),
-			this.includeHead?.(),
-			this.includeBody?.(),
-			this.includeEndOfBody?.(),
+		const [head, body, endOfBody] = await Promise.all([
+			this.renderHead?.(),
+			this.renderBody?.(),
+			this.renderEndOfBody?.(),
 		]);
 
 		const cspSource = webview.cspSource;
-		const cspNonce = getNonce();
-
-		const root = webview.asWebviewUri(this.container.context.extensionUri).toString();
-		const webRoot = webview.asWebviewUri(webRootUri).toString();
+		const cspNonce = randomBytes(16).toString('base64');
+		const root = webview.asWebviewUri(Container.context.extensionUri).toString();
 
 		const html = content
 			.replace(/#{(head|body|endOfBody)}/i, (_substring, token) => {
@@ -209,16 +344,12 @@ export abstract class WebviewBase<State> implements Disposable {
 					case 'body':
 						return body ?? '';
 					case 'endOfBody':
-						return bootstrap != null
-							? `<script type="text/javascript" nonce="#{cspNonce}">window.bootstrap = ${JSON.stringify(
-									bootstrap,
-							  )};</script>${endOfBody ?? ''}`
-							: endOfBody ?? '';
+						return endOfBody ?? '';
 					default:
 						return '';
 				}
 			})
-			.replace(/#{(cspSource|cspNonce|root|webroot)}/g, (substring, token) => {
+			.replace(/#{(cspSource|cspNonce|root)}/g, (substring, token) => {
 				switch (token) {
 					case 'cspSource':
 						return cspSource;
@@ -226,8 +357,6 @@ export abstract class WebviewBase<State> implements Disposable {
 						return cspNonce;
 					case 'root':
 						return root;
-					case 'webroot':
-						return webRoot;
 					default:
 						return '';
 				}
@@ -236,14 +365,29 @@ export abstract class WebviewBase<State> implements Disposable {
 		return html;
 	}
 
-	protected notify<T extends IpcNotificationType<any>>(type: T, params: IpcMessageParams<T>): Thenable<boolean> {
+	protected notify<NT extends IpcNotificationType>(type: NT, params: IpcNotificationParamsOf<NT>): Thenable<boolean> {
 		return this.postMessage({ id: nextIpcId(), method: type.method, params: params });
+	}
+
+	protected getCustomSettings(): Record<string, boolean> {
+		const customSettings = Object.create(null);
+		for (const [key, setting] of this.customSettings) {
+			customSettings[key] = setting.enabled();
+		}
+		return customSettings;
+	}
+
+	private notifyDidChangeConfiguration() {
+		// Make sure to get the raw config, not from the container which has the modes mixed in
+		return this.notify(DidChangeConfigurationNotificationType, {
+			config: configuration.get(),
+			customSettings: this.getCustomSettings(),
+		});
 	}
 
 	private postMessage(message: IpcMessage) {
 		if (this._panel == null) return Promise.resolve(false);
 
-		Logger.debug(`Webview(${this.id}).postMessage: method=${message.method}`);
 		return this._panel.webview.postMessage(message);
 	}
 }

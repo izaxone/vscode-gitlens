@@ -1,17 +1,11 @@
-import {
-	getTokensFromTemplate,
-	getWidth,
-	interpolate,
-	interpolateAsync,
-	padLeft,
-	padRight,
-	TokenOptions,
-	truncate,
-} from '../../system/string';
+'use strict';
+import { Strings } from '../../system';
+
+const emptyStr = '';
 
 export interface FormatOptions {
 	dateFormat?: string | null;
-	tokenOptions?: Record<string, TokenOptions | undefined>;
+	tokenOptions?: Record<string, Strings.TokenOptions | undefined>;
 }
 
 type Constructor<T = Record<string, unknown>> = new (...args: any[]) => T;
@@ -53,7 +47,7 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 
 	private collapsableWhitespace: number = 0;
 
-	protected _padOrTruncate(s: string, options: TokenOptions | undefined) {
+	protected _padOrTruncate(s: string, options: Strings.TokenOptions | undefined) {
 		if (s == null || s.length === 0) return s;
 
 		// NOTE: the collapsable whitespace logic relies on the javascript template evaluation to be left to right
@@ -74,7 +68,7 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 			max += this.collapsableWhitespace;
 			this.collapsableWhitespace = 0;
 
-			const width = getWidth(s);
+			const width = Strings.getWidth(s);
 			const diff = max - width;
 			if (diff > 0) {
 				if (options.collapseWhitespace) {
@@ -82,20 +76,20 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 				}
 
 				if (options.padDirection === 'left') {
-					s = padLeft(s, max, undefined, width);
+					s = Strings.padLeft(s, max, undefined, width);
 				} else {
 					if (options.collapseWhitespace) {
 						max -= diff;
 					}
-					s = padRight(s, max, undefined, width);
+					s = Strings.padRight(s, max, undefined, width);
 				}
 			} else if (diff < 0) {
-				s = truncate(s, max, undefined, width);
+				s = Strings.truncate(s, max, undefined, width);
 			}
 		}
 
 		if (options.prefix || options.suffix) {
-			s = `${options.prefix ?? ''}${s}${options.suffix ?? ''}`;
+			s = `${options.prefix ?? emptyStr}${s}${options.suffix ?? emptyStr}`;
 		}
 
 		return s;
@@ -111,7 +105,7 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 	): string {
 		// Preserve spaces
 		template = template.replace(spaceReplacementRegex, '\u00a0');
-		if (formatter instanceof Formatter) return interpolate(template, formatter);
+		if (formatter instanceof Formatter) return Strings.interpolate(template, formatter);
 
 		let options: Options | undefined = undefined;
 		if (dateFormatOrOptions == null || typeof dateFormatOrOptions === 'string') {
@@ -124,8 +118,8 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 		}
 
 		if (options.tokenOptions == null) {
-			const tokenOptions = getTokensFromTemplate(template).reduce<{
-				[token: string]: TokenOptions | undefined;
+			const tokenOptions = Strings.getTokensFromTemplate(template).reduce<{
+				[token: string]: Strings.TokenOptions | undefined;
 			}>((map, token) => {
 				map[token.key] = token.options;
 				return map;
@@ -140,7 +134,7 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 			this._formatter.reset(item, options);
 		}
 
-		return interpolate(template, this._formatter);
+		return Strings.interpolate(template, this._formatter);
 	}
 
 	protected static fromTemplateCoreAsync<
@@ -155,7 +149,7 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 	): Promise<string> {
 		// Preserve spaces
 		template = template.replace(spaceReplacementRegex, '\u00a0');
-		if (formatter instanceof Formatter) return interpolateAsync(template, formatter);
+		if (formatter instanceof Formatter) return Strings.interpolateAsync(template, formatter);
 
 		let options: Options | undefined = undefined;
 		if (dateFormatOrOptions == null || typeof dateFormatOrOptions === 'string') {
@@ -168,8 +162,8 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 		}
 
 		if (options.tokenOptions == null) {
-			const tokenOptions = getTokensFromTemplate(template).reduce<{
-				[token: string]: TokenOptions | undefined;
+			const tokenOptions = Strings.getTokensFromTemplate(template).reduce<{
+				[token: string]: Strings.TokenOptions | undefined;
 			}>((map, token) => {
 				map[token.key] = token.options;
 				return map;
@@ -184,7 +178,7 @@ export abstract class Formatter<Item = any, Options extends FormatOptions = Form
 			this._formatter.reset(item, options);
 		}
 
-		return interpolateAsync(template, this._formatter);
+		return Strings.interpolateAsync(template, this._formatter);
 	}
 
 	static has<TOptions extends FormatOptions>(

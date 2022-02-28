@@ -1,3 +1,4 @@
+'use strict';
 import { CustomRemoteType, RemotesConfig } from '../../configuration';
 import { Logger } from '../../logger';
 import { AzureDevOpsRemote } from './azure-devops';
@@ -8,9 +9,9 @@ import { GerritRemote } from './gerrit';
 import { GiteaRemote } from './gitea';
 import { GitHubRemote } from './github';
 import { GitLabRemote } from './gitlab';
-import { RemoteProvider } from './provider';
+import { RemoteProvider, RichRemoteProvider } from './provider';
 
-// export { RemoteProvider, RichRemoteProvider };
+export { RemoteProvider, RichRemoteProvider };
 export type RemoteProviders = {
 	custom: boolean;
 	matcher: string | RegExp;
@@ -130,8 +131,7 @@ export class RemoteProviderFactory {
 	private static getCustomProvider(cfg: RemotesConfig) {
 		switch (cfg.type) {
 			case CustomRemoteType.AzureDevOps:
-				return (domain: string, path: string) =>
-					new AzureDevOpsRemote(domain, path, cfg.protocol, cfg.name, true);
+				return (domain: string, path: string) => new AzureDevOpsRemote(domain, path, cfg.protocol, cfg.name, true);
 			case CustomRemoteType.Bitbucket:
 				return (domain: string, path: string) =>
 					new BitbucketRemote(domain, path, cfg.protocol, cfg.name, true);

@@ -1,3 +1,4 @@
+'use strict';
 import { GitContributor } from './contributor';
 
 export interface GitShortLog {

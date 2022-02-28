@@ -1,3 +1,4 @@
+'use strict';
 import {
 	CancellationToken,
 	commands,
@@ -15,27 +16,26 @@ import {
 	ViewFilesLayout,
 	ViewShowBranchComparison,
 } from '../configuration';
-import { Commands } from '../constants';
+import { GlyphChars } from '../constants';
 import { Container } from '../container';
-import { GitUri } from '../git/gitUri';
 import {
 	GitBranchReference,
-	GitCommit,
+	GitLogCommit,
 	GitReference,
 	GitRevisionReference,
 	RepositoryChange,
 	RepositoryChangeComparisonMode,
 	RepositoryChangeEvent,
-} from '../git/models';
-import { executeCommand } from '../system/command';
-import { gate } from '../system/decorators/gate';
+} from '../git/git';
+import { GitUri } from '../git/gitUri';
+import { debug, gate, Strings } from '../system';
 import {
 	BranchesNode,
 	BranchNode,
 	BranchOrTagFolderNode,
-	RepositoriesSubscribeableNode,
 	RepositoryFolderNode,
 	RepositoryNode,
+	unknownGitUri,
 	ViewNode,
 } from './nodes';
 import { ViewBase } from './viewBase';
@@ -63,10 +63,17 @@ export class BranchesRepositoryNode extends RepositoryFolderNode<BranchesView, B
 	}
 }
 
-export class BranchesViewNode extends RepositoriesSubscribeableNode<BranchesView, BranchesRepositoryNode> {
+export class BranchesViewNode extends ViewNode<BranchesView> {
+	protected override splatted = true;
+	private children: BranchesRepositoryNode[] | undefined;
+
+	constructor(view: BranchesView) {
+		super(unknownGitUri, view);
+	}
+
 	async getChildren(): Promise<ViewNode[]> {
 		if (this.children == null) {
-			const repositories = this.view.container.git.openRepositories;
+			const repositories = await Container.git.getOrderedRepositories();
 			if (repositories.length === 0) {
 				this.view.message = 'No branches could be found.';
 
@@ -84,8 +91,12 @@ export class BranchesViewNode extends RepositoriesSubscribeableNode<BranchesView
 		if (this.children.length === 1) {
 			const [child] = this.children;
 
+			if (!child.repo.supportsChangeEvents) {
+				this.view.description = `${Strings.pad(GlyphChars.Warning, 0, 2)}Auto-refresh unavailable`;
+			}
+
 			const branches = await child.repo.getBranches({ filter: b => !b.remote });
-			if (branches.values.length === 0) {
+			if (branches.length === 0) {
 				this.view.message = 'No branches could be found.';
 				this.view.title = 'Branches';
 
@@ -95,7 +106,7 @@ export class BranchesViewNode extends RepositoriesSubscribeableNode<BranchesView
 			}
 
 			this.view.message = undefined;
-			this.view.title = `Branches (${branches.values.length})`;
+			this.view.title = `Branches (${branches.length})`;
 
 			return child.getChildren();
 		}
@@ -107,36 +118,51 @@ export class BranchesViewNode extends RepositoriesSubscribeableNode<BranchesView
 		const item = new TreeItem('Branches', TreeItemCollapsibleState.Expanded);
 		return item;
 	}
+
+	override async getSplattedChild() {
+		if (this.children == null) {
+			await this.getChildren();
+		}
+
+		return this.children?.length === 1 ? this.children[0] : undefined;
+	}
+
+	@gate()
+	@debug()
+	override refresh(reset: boolean = false) {
+		if (reset && this.children != null) {
+			for (const child of this.children) {
+				child.dispose();
+			}
+			this.children = undefined;
+		}
+	}
 }
 
 export class BranchesView extends ViewBase<BranchesViewNode, BranchesViewConfig> {
 	protected readonly configKey = 'branches';
 
-	constructor(container: Container) {
-		super('gitlens.views.branches', 'Branches', container);
+	constructor() {
+		super('gitlens.views.branches', 'Branches');
 	}
 
-	override get canReveal(): boolean {
-		return this.config.reveal || !configuration.get('views.repositories.showBranches');
-	}
-
-	protected getRoot() {
+	getRoot() {
 		return new BranchesViewNode(this);
 	}
 
 	protected registerCommands(): Disposable[] {
-		void this.container.viewCommands;
+		void Container.viewCommands;
 
 		return [
 			commands.registerCommand(
 				this.getQualifiedCommand('copy'),
-				() => executeCommand(Commands.ViewsCopy, this.selection),
+				() => commands.executeCommand('gitlens.views.copy', this.selection),
 				this,
 			),
 			commands.registerCommand(
 				this.getQualifiedCommand('refresh'),
-				() => {
-					this.container.git.resetCaches('branches');
+				async () => {
+					await Container.git.resetCaches('branches');
 					return this.refresh(true);
 				},
 				this,
@@ -238,15 +264,11 @@ export class BranchesView extends ViewBase<BranchesViewNode, BranchesViewConfig>
 		});
 	}
 
-	async findCommit(commit: GitCommit | { repoPath: string; ref: string }, token?: CancellationToken) {
+	async findCommit(commit: GitLogCommit | { repoPath: string; ref: string }, token?: CancellationToken) {
 		const repoNodeId = RepositoryNode.getId(commit.repoPath);
 
 		// Get all the branches the commit is on
-		const branches = await this.container.git.getCommitBranches(
-			commit.repoPath,
-			commit.ref,
-			GitCommit.is(commit) ? { commitDate: commit.committer.date } : undefined,
-		);
+		const branches = await Container.git.getCommitBranches(commit.repoPath, commit.ref);
 		if (branches.length === 0) return undefined;
 
 		return this.findNode((n: any) => n.commit?.ref === commit.ref, {
@@ -282,7 +304,7 @@ export class BranchesView extends ViewBase<BranchesViewNode, BranchesViewConfig>
 		return window.withProgress(
 			{
 				location: ProgressLocation.Notification,
-				title: `Revealing ${GitReference.toString(branch, { icon: false, quoted: true })} in the side bar...`,
+				title: `Revealing ${GitReference.toString(branch, { icon: false })} in the side bar...`,
 				cancellable: true,
 			},
 			async (progress, token) => {
@@ -308,7 +330,7 @@ export class BranchesView extends ViewBase<BranchesViewNode, BranchesViewConfig>
 		return window.withProgress(
 			{
 				location: ProgressLocation.Notification,
-				title: `Revealing ${GitReference.toString(commit, { icon: false, quoted: true })} in the side bar...`,
+				title: `Revealing ${GitReference.toString(commit, { icon: false })} in the side bar...`,
 				cancellable: true,
 			},
 			async (progress, token) => {
@@ -320,23 +342,6 @@ export class BranchesView extends ViewBase<BranchesViewNode, BranchesViewConfig>
 				return node;
 			},
 		);
-	}
-
-	@gate(() => '')
-	async revealRepository(
-		repoPath: string,
-		options?: { select?: boolean; focus?: boolean; expand?: boolean | number },
-	) {
-		const node = await this.findNode(RepositoryFolderNode.getId(repoPath), {
-			maxDepth: 1,
-			canTraverse: n => n instanceof BranchesViewNode || n instanceof RepositoryFolderNode,
-		});
-
-		if (node !== undefined) {
-			await this.reveal(node, options);
-		}
-
-		return node;
 	}
 
 	private setLayout(layout: ViewBranchesLayout) {

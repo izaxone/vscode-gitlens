@@ -1,13 +1,21 @@
-import { TextEditor, Uri } from 'vscode';
-import { Commands, CoreCommands } from '../constants';
-import type { Container } from '../container';
+'use strict';
+import * as paths from 'path';
+import { commands, TextEditor, Uri } from 'vscode';
+import { BuiltInCommands } from '../constants';
+import { Container } from '../container';
+import { toGitLensFSUri } from '../git/fsProvider';
 import { GitUri } from '../git/gitUri';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command, executeCoreCommand } from '../system/command';
-import { basename } from '../system/path';
-import { openWorkspace, OpenWorkspaceLocation } from '../system/utils';
-import { ActiveEditorCommand, CommandContext, getCommandUri } from './base';
+import {
+	ActiveEditorCommand,
+	command,
+	CommandContext,
+	Commands,
+	getCommandUri,
+	openWorkspace,
+	OpenWorkspaceLocation,
+} from './common';
 
 export interface BrowseRepoAtRevisionCommandArgs {
 	uri?: Uri;
@@ -18,7 +26,7 @@ export interface BrowseRepoAtRevisionCommandArgs {
 
 @command()
 export class BrowseRepoAtRevisionCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([
 			Commands.BrowseRepoAtRevision,
 			Commands.BrowseRepoAtRevisionInNewWindow,
@@ -58,18 +66,18 @@ export class BrowseRepoAtRevisionCommand extends ActiveEditorCommand {
 			if (gitUri.sha == null) return;
 
 			const sha = args?.before
-				? await this.container.git.resolveReference(gitUri.repoPath!, `${gitUri.sha}^`)
+				? await Container.git.resolveReference(gitUri.repoPath!, `${gitUri.sha}^`)
 				: gitUri.sha;
-			uri = this.container.git.getRevisionUri(sha, gitUri.repoPath!, gitUri.repoPath!);
+			uri = toGitLensFSUri(sha, gitUri.repoPath!);
 			gitUri = GitUri.fromRevisionUri(uri);
 
 			openWorkspace(uri, {
 				location: args.openInNewWindow ? OpenWorkspaceLocation.NewWindow : OpenWorkspaceLocation.AddToWorkspace,
-				name: `${basename(gitUri.repoPath!)} @ ${gitUri.shortSha}`,
+				name: `${paths.basename(gitUri.repoPath!)} @ ${gitUri.shortSha}`,
 			});
 
 			if (!args.openInNewWindow) {
-				void executeCoreCommand(CoreCommands.FocusFilesExplorer);
+				void commands.executeCommand(BuiltInCommands.FocusFilesExplorer);
 			}
 		} catch (ex) {
 			Logger.error(ex, 'BrowseRepoAtRevisionCommand');

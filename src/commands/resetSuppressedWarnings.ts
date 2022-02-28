@@ -1,13 +1,11 @@
+'use strict';
 import { ConfigurationTarget } from 'vscode';
 import { configuration } from '../configuration';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+import { command, Command, Commands } from './common';
 
 @command()
 export class ResetSuppressedWarningsCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.ResetSuppressedWarnings);
 	}
 

@@ -1,3 +1,5 @@
+'use strict';
+import * as paths from 'path';
 import {
 	Disposable,
 	Event,
@@ -10,15 +12,11 @@ import {
 	Uri,
 	workspace,
 } from 'vscode';
-import { isLinux } from '@env/platform';
-import { Schemes } from '../constants';
+import { DocumentSchemes } from '../constants';
 import { Container } from '../container';
+import { GitRevision, GitTree } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { debug } from '../system/decorators/log';
-import { map } from '../system/iterable';
-import { normalizePath, relative } from '../system/path';
-import { TernarySearchTree } from '../system/searchTree';
-import { GitRevision, GitTreeEntry } from './models';
+import { debug, Iterables, Strings, TernarySearchTree } from '../system';
 
 const emptyArray = new Uint8Array(0);
 
@@ -27,14 +25,18 @@ export function fromGitLensFSUri(uri: Uri): { path: string; ref: string; repoPat
 	return { path: gitUri.relativePath, ref: gitUri.sha!, repoPath: gitUri.repoPath! };
 }
 
+export function toGitLensFSUri(ref: string, repoPath: string): Uri {
+	return GitUri.toRevisionUri(ref, repoPath, repoPath);
+}
+
 export class GitFileSystemProvider implements FileSystemProvider, Disposable {
 	private readonly _disposable: Disposable;
-	private readonly _searchTreeMap = new Map<string, Promise<TernarySearchTree<string, GitTreeEntry>>>();
+	private readonly _searchTreeMap = new Map<string, Promise<TernarySearchTree<string, GitTree>>>();
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		this._disposable = Disposable.from(
-			workspace.registerFileSystemProvider(Schemes.GitLens, this, {
-				isCaseSensitive: isLinux,
+			workspace.registerFileSystemProvider(DocumentSchemes.GitLens, this, {
+				isCaseSensitive: true,
 				isReadonly: true,
 			}),
 		);
@@ -67,8 +69,8 @@ export class GitFileSystemProvider implements FileSystemProvider, Disposable {
 		if (tree === undefined) throw FileSystemError.FileNotFound(uri);
 
 		const items = [
-			...map<GitTreeEntry, [string, FileType]>(tree, t => [
-				path != null && path.length !== 0 ? normalizePath(relative(path, t.path)) : t.path,
+			...Iterables.map<GitTree, [string, FileType]>(tree, t => [
+				path != null && path.length !== 0 ? Strings.normalizePath(paths.relative(path, t.path)) : t.path,
 				typeToFileType(t.type),
 			]),
 		];
@@ -81,8 +83,10 @@ export class GitFileSystemProvider implements FileSystemProvider, Disposable {
 
 		if (ref === GitRevision.deletedOrMissing) return emptyArray;
 
-		const data = await this.container.git.getRevisionContent(repoPath, path, ref);
-		return data != null ? data : emptyArray;
+		const buffer = await Container.git.getVersionedFileBuffer(repoPath, path, ref);
+		if (buffer === undefined) return emptyArray;
+
+		return buffer;
 	}
 
 	rename(): void | Thenable<void> {
@@ -121,7 +125,7 @@ export class GitFileSystemProvider implements FileSystemProvider, Disposable {
 				};
 			}
 
-			treeItem = await this.container.git.getTreeEntryForRevision(repoPath, path, ref);
+			treeItem = await Container.git.getTreeFileForRevision(repoPath, path, ref);
 		}
 
 		if (treeItem === undefined) {
@@ -149,8 +153,8 @@ export class GitFileSystemProvider implements FileSystemProvider, Disposable {
 	}
 
 	private async createSearchTree(ref: string, repoPath: string) {
-		const searchTree = TernarySearchTree.forPaths<GitTreeEntry>();
-		const trees = await this.container.git.getTreeForRevision(repoPath, ref);
+		const searchTree = TernarySearchTree.forPaths<GitTree>();
+		const trees = await Container.git.getTreeForRevision(repoPath, ref);
 
 		// Add a fake root folder so that searches will work
 		searchTree.set('~', { commitSha: '', path: '~', size: 0, type: 'tree' });

@@ -1,15 +1,11 @@
+'use strict';
 import { DecorationOptions, Range, TextEditor, ThemableDecorationAttachmentRenderOptions } from 'vscode';
 import { FileAnnotationType, GravatarDefaultStyle } from '../configuration';
 import { GlyphChars } from '../constants';
 import { Container } from '../container';
-import { CommitFormatOptions, CommitFormatter } from '../git/formatters';
-import { GitBlame, GitCommit } from '../git/models';
+import { CommitFormatOptions, CommitFormatter, GitBlame, GitBlameCommit } from '../git/git';
 import { Logger } from '../logger';
-import { filterMap } from '../system/array';
-import { log } from '../system/decorators/log';
-import { first } from '../system/iterable';
-import { Stopwatch } from '../system/stopwatch';
-import { getTokensFromTemplate, getWidth, TokenOptions } from '../system/string';
+import { Arrays, Iterables, log, Strings } from '../system';
 import { GitDocumentState } from '../trackers/gitDocumentTracker';
 import { TrackedDocument } from '../trackers/trackedDocument';
 import { AnnotationContext } from './annotationProvider';
@@ -18,8 +14,8 @@ import { BlameAnnotationProviderBase } from './blameAnnotationProvider';
 import { Decorations } from './fileAnnotationController';
 
 export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
-	constructor(editor: TextEditor, trackedDocument: TrackedDocument<GitDocumentState>, container: Container) {
-		super(FileAnnotationType.Blame, editor, trackedDocument, container);
+	constructor(editor: TextEditor, trackedDocument: TrackedDocument<GitDocumentState>) {
+		super(FileAnnotationType.Blame, editor, trackedDocument);
 	}
 
 	override clear() {
@@ -41,13 +37,13 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 		const blame = await this.getBlame();
 		if (blame == null) return false;
 
-		const sw = new Stopwatch(cc!);
+		let start = process.hrtime();
 
-		const cfg = this.container.config.blame;
+		const cfg = Container.config.blame;
 
 		// Precalculate the formatting options so we don't need to do it on each iteration
-		const tokenOptions = getTokensFromTemplate(cfg.format).reduce<{
-			[token: string]: TokenOptions | undefined;
+		const tokenOptions = Strings.getTokensFromTemplate(cfg.format).reduce<{
+			[token: string]: Strings.TokenOptions | undefined;
 		}>((map, token) => {
 			map[token.key] = token.options;
 			return map;
@@ -55,17 +51,17 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 
 		let getBranchAndTagTips;
 		if (CommitFormatter.has(cfg.format, 'tips')) {
-			getBranchAndTagTips = await this.container.git.getBranchesAndTagsTipsFn(blame.repoPath);
+			getBranchAndTagTips = await Container.git.getBranchesAndTagsTipsFn(blame.repoPath);
 		}
 
 		const options: CommitFormatOptions = {
-			dateFormat: cfg.dateFormat === null ? this.container.config.defaultDateFormat : cfg.dateFormat,
+			dateFormat: cfg.dateFormat === null ? Container.config.defaultDateFormat : cfg.dateFormat,
 			getBranchAndTagTips: getBranchAndTagTips,
 			tokenOptions: tokenOptions,
 		};
 
 		const avatars = cfg.avatars;
-		const gravatarDefault = this.container.config.defaultGravatarsStyle;
+		const gravatarDefault = Container.config.defaultGravatarsStyle;
 		const separateLines = cfg.separateLines;
 		const renderOptions = Annotations.gutterRenderOptions(
 			separateLines,
@@ -79,7 +75,7 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 		const decorationsMap = new Map<string, DecorationOptions | undefined>();
 		const avatarDecorationsMap = avatars ? new Map<string, ThemableDecorationAttachmentRenderOptions>() : undefined;
 
-		let commit: GitCommit | undefined;
+		let commit: GitBlameCommit | undefined;
 		let compacted = false;
 		let gutter: DecorationOptions | undefined;
 		let previousSha: string | undefined;
@@ -104,7 +100,9 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 					gutter.renderOptions = {
 						before: {
 							...gutter.renderOptions!.before,
-							contentText: GlyphChars.Space.repeat(getWidth(gutter.renderOptions!.before!.contentText!)),
+							contentText: GlyphChars.Space.repeat(
+								Strings.getWidth(gutter.renderOptions!.before!.contentText!),
+							),
 						},
 					};
 
@@ -152,24 +150,26 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 
 			decorationOptions.push(gutter);
 
-			if (avatars && commit.author.email != null) {
+			if (avatars && commit.email != null) {
 				await this.applyAvatarDecoration(commit, gutter, gravatarDefault, avatarDecorationsMap!);
 			}
 
 			decorationsMap.set(l.sha, gutter);
 		}
 
-		sw.restart({ suffix: ' to compute gutter blame annotations' });
+		Logger.log(cc, `${Strings.getDurationMilliseconds(start)} ms to compute gutter blame annotations`);
 
 		if (decorationOptions.length) {
+			start = process.hrtime();
+
 			this.setDecorations([
 				{ decorationType: Decorations.gutterBlameAnnotation, rangesOrOptions: decorationOptions },
 			]);
 
-			sw.stop({ suffix: ' to apply all gutter blame annotations' });
+			Logger.log(cc, `${Strings.getDurationMilliseconds(start)} ms to apply all gutter blame annotations`);
 		}
 
-		this.registerHoverProviders(this.container.config.hovers.annotations);
+		this.registerHoverProviders(Container.config.hovers.annotations);
 		return true;
 	}
 
@@ -191,7 +191,7 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 				sha = commitLine?.sha;
 			}
 		} else {
-			sha = first(blame.commits.values()).sha;
+			sha = Iterables.first(blame.commits.values()).sha;
 		}
 
 		if (!sha) {
@@ -199,7 +199,7 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 			return;
 		}
 
-		const highlightDecorationRanges = filterMap(blame.lines, l =>
+		const highlightDecorationRanges = Arrays.filterMap(blame.lines, l =>
 			l.sha === sha
 				? // editor lines are 0-based
 				  this.editor.document.validateRange(new Range(l.line - 1, 0, l.line - 1, Number.MAX_SAFE_INTEGER))
@@ -210,12 +210,12 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 	}
 
 	private async applyAvatarDecoration(
-		commit: GitCommit,
+		commit: GitBlameCommit,
 		gutter: DecorationOptions,
 		gravatarDefault: GravatarDefaultStyle,
 		map: Map<string, ThemableDecorationAttachmentRenderOptions>,
 	) {
-		let avatarDecoration = map.get(commit.author.email ?? '');
+		let avatarDecoration = map.get(commit.email!);
 		if (avatarDecoration == null) {
 			const url = (await commit.getAvatarUri({ defaultStyle: gravatarDefault, size: 16 })).toString(true);
 			avatarDecoration = {
@@ -226,7 +226,7 @@ export class GutterBlameAnnotationProvider extends BlameAnnotationProviderBase {
 					url,
 				)});background-size:16px 16px;margin-left: 0 !important`,
 			};
-			map.set(commit.author.email ?? '', avatarDecoration);
+			map.set(commit.email!, avatarDecoration);
 		}
 
 		gutter.renderOptions!.after = avatarDecoration;

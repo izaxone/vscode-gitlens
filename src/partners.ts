@@ -1,9 +1,9 @@
-import { CancellationTokenSource, Extension, ExtensionContext, extensions, Uri } from 'vscode';
+'use strict';
+import { CancellationTokenSource, commands, Extension, ExtensionContext, extensions, Uri } from 'vscode';
 import type { ActionContext, HoverCommandsActionContext } from './api/gitlens';
-import type { InviteToLiveShareCommandArgs } from './commands';
-import { Commands, CoreCommands } from './constants';
+import { Commands, executeCommand, InviteToLiveShareCommandArgs } from './commands';
+import { BuiltInCommands } from './constants';
 import { Container } from './container';
-import { executeCommand, executeCoreCommand } from './system/command';
 
 export async function installExtension<T>(
 	extensionId: string,
@@ -12,15 +12,12 @@ export async function installExtension<T>(
 	vsix?: Uri,
 ): Promise<Extension<T> | undefined> {
 	try {
-		let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+		let timer: any = 0;
 		const extension = new Promise<Extension<any> | undefined>(resolve => {
 			const disposable = extensions.onDidChange(() => {
 				const extension = extensions.getExtension(extensionId);
 				if (extension != null) {
-					if (timer != null) {
-						clearTimeout(timer);
-						timer = undefined;
-					}
+					clearTimeout(timer);
 					disposable.dispose();
 
 					resolve(extension);
@@ -34,12 +31,9 @@ export async function installExtension<T>(
 			});
 		});
 
-		await executeCoreCommand(CoreCommands.InstallExtension, vsix ?? extensionId);
+		await commands.executeCommand(BuiltInCommands.InstallExtension, vsix ?? extensionId);
 		// Wait for extension activation until timeout expires
-		timer = setTimeout(() => {
-			timer = undefined;
-			tokenSource.cancel();
-		}, timeout);
+		timer = setTimeout(() => tokenSource.cancel(), timeout);
 
 		return extension;
 	} catch {
@@ -54,37 +48,33 @@ export function registerPartnerActionRunners(context: ExtensionContext): void {
 
 function registerLiveShare(context: ExtensionContext) {
 	context.subscriptions.push(
-		Container.instance.actionRunners.registerBuiltInPartner<HoverCommandsActionContext>(
-			'liveshare',
-			'hover.commands',
-			{
-				name: 'Live Share',
-				label: (context: ActionContext) => {
-					if (context.type === 'hover.commands') {
-						if (context.commit.author.name !== 'You') {
-							return `$(live-share) Invite ${context.commit.author.name}${
-								// eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-								context.commit.author.presence?.statusText
-									? ` (${context.commit.author.presence?.statusText})`
-									: ''
-							} to a Live Share Session`;
-						}
+		Container.actionRunners.registerBuiltInPartner<HoverCommandsActionContext>('liveshare', 'hover.commands', {
+			name: 'Live Share',
+			label: (context: ActionContext) => {
+				if (context.type === 'hover.commands') {
+					if (context.commit.author.name !== 'You') {
+						return `$(live-share) Invite ${context.commit.author.name}${
+							// eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+							context.commit.author.presence?.statusText
+								? ` (${context.commit.author.presence?.statusText})`
+								: ''
+						} to a Live Share Session`;
 					}
+				}
 
-					return '$(live-share) Start a Live Share Session';
-				},
-				run: async (context: ActionContext) => {
-					if (context.type !== 'hover.commands' || context.commit.author.name === 'You') {
-						await executeCommand<InviteToLiveShareCommandArgs>(Commands.InviteToLiveShare, {});
-
-						return;
-					}
-
-					await executeCommand<InviteToLiveShareCommandArgs>(Commands.InviteToLiveShare, {
-						email: context.commit.author.email,
-					});
-				},
+				return '$(live-share) Start a Live Share Session';
 			},
-		),
+			run: async (context: ActionContext) => {
+				if (context.type !== 'hover.commands' || context.commit.author.name === 'You') {
+					await executeCommand<InviteToLiveShareCommandArgs>(Commands.InviteToLiveShare, {});
+
+					return;
+				}
+
+				await executeCommand<InviteToLiveShareCommandArgs>(Commands.InviteToLiveShare, {
+					email: context.commit.author.email,
+				});
+			},
+		}),
 	);
 }

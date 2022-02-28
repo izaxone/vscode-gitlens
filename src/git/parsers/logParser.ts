@@ -1,22 +1,22 @@
+'use strict';
+import * as paths from 'path';
 import { Range } from 'vscode';
-import type { Container } from '../../container';
-import { filterMap } from '../../system/array';
-import { debug } from '../../system/decorators/log';
-import { normalizePath, relative } from '../../system/path';
-import { getLines } from '../../system/string';
+import { Arrays, debug, Strings } from '../../system';
 import {
-	GitCommit,
-	GitCommitIdentity,
-	GitCommitLine,
+	GitAuthor,
+	GitCommitType,
 	GitFile,
-	GitFileChange,
-	GitFileChangeStats,
 	GitFileIndexStatus,
 	GitLog,
+	GitLogCommit,
+	GitLogCommitLine,
 	GitRevision,
 	GitUser,
-	isUserMatch,
-} from '../models';
+} from '../git';
+
+const emptyEntry: LogEntry = {};
+const emptyStr = '';
+const slash = '/';
 
 const diffRegex = /diff --git a\/(.*) b\/(.*)/;
 const diffRangeRegex = /^@@ -(\d+?),(\d+?) \+(\d+?),(\d+?) @@/;
@@ -26,6 +26,7 @@ const fileStatusAndSummaryRegex = /^(\d+?|-)\s+?(\d+?|-)\s+?(.*)(?:\n\s(delete|r
 const fileStatusAndSummaryRenamedFileRegex = /(.+)\s=>\s(.+)/;
 const fileStatusAndSummaryRenamedFilePathRegex = /(.*?){(.+?)\s=>\s(.*?)}(.*)/;
 
+const logRefsRegex = /^<r> (.*)/gm;
 const logFileSimpleRegex = /^<r> (.*)\s*(?:(?:diff --git a\/(.*) b\/(.*))|(?:(\S)\S*\t([^\t\n]+)(?:\t(.+))?))/gm;
 const logFileSimpleRenamedRegex = /^<r> (\S+)\s*(.*)$/s;
 const logFileSimpleRenamedFilesRegex = /^(\S)\S*\t([^\t\n]+)(?:\t(.+)?)?$/gm;
@@ -36,93 +37,39 @@ const rb = '%x3e'; // `%x${'>'.charCodeAt(0).toString(16)}`;
 const sl = '%x2f'; // `%x${'/'.charCodeAt(0).toString(16)}`;
 const sp = '%x20'; // `%x${' '.charCodeAt(0).toString(16)}`;
 
-export const enum LogType {
-	Log = 0,
-	LogFile = 1,
-}
-
 interface LogEntry {
-	sha?: string;
+	ref?: string;
 
 	author?: string;
-	authorDate?: string;
-	authorEmail?: string;
-
-	committer?: string;
+	date?: string;
 	committedDate?: string;
-	committerEmail?: string;
+	email?: string;
 
 	parentShas?: string[];
 
-	/** @deprecated */
-	path?: string;
-	/** @deprecated */
-	originalPath?: string;
-
-	file?: GitFile;
+	fileName?: string;
+	originalFileName?: string;
 	files?: GitFile[];
 
 	status?: GitFileIndexStatus;
-	fileStats?: GitFileChangeStats;
+	fileStats?: {
+		insertions: number;
+		deletions: number;
+	};
 
 	summary?: string;
 
-	line?: GitCommitLine;
+	line?: GitLogCommitLine;
 }
 
-export type Parser<T> = {
-	arguments: string[];
-	parse: (data: string) => Generator<T>;
-};
-
-type ParsedEntryFile = { status: string; path: string; originalPath?: string };
-type ParsedEntryWithFiles<T> = { [K in keyof T]: string } & { files: ParsedEntryFile[] };
-type ParserWithFiles<T> = {
-	arguments: string[];
-	parse: (data: string) => Generator<ParsedEntryWithFiles<T>>;
-};
-
 export class GitLogParser {
-	static readonly shortstatRegex =
-		/(?<files>\d+) files? changed(?:, (?<additions>\d+) insertions?\(\+\))?(?:, (?<deletions>\d+) deletions?\(-\))?/;
-
-	private static _defaultParser: ParserWithFiles<{
-		sha: string;
-		author: string;
-		authorEmail: string;
-		authorDate: string;
-		committer: string;
-		committerEmail: string;
-		committerDate: string;
-		message: string;
-		parents: string[];
-	}>;
-	static get defaultParser() {
-		if (this._defaultParser == null) {
-			this._defaultParser = GitLogParser.createWithFiles({
-				sha: '%H',
-				author: '%aN',
-				authorEmail: '%aE',
-				authorDate: '%at',
-				committer: '%cN',
-				committerEmail: '%cE',
-				committerDate: '%ct',
-				message: '%B',
-				parents: '%P',
-			});
-		}
-		return this._defaultParser;
-	}
-
 	static defaultFormat = [
 		`${lb}${sl}f${rb}`,
 		`${lb}r${rb}${sp}%H`, // ref
 		`${lb}a${rb}${sp}%aN`, // author
-		`${lb}e${rb}${sp}%aE`, // author email
-		`${lb}d${rb}${sp}%at`, // author date
-		`${lb}n${rb}${sp}%cN`, // committer
-		`${lb}m${rb}${sp}%cE`, // committer email
-		`${lb}c${rb}${sp}%ct`, // committer date
+		`${lb}e${rb}${sp}%aE`, // email
+		`${lb}d${rb}${sp}%at`, // date
+		`${lb}c${rb}${sp}%ct`, // committed date
 		`${lb}p${rb}${sp}%P`, // parents
 		`${lb}s${rb}`,
 		'%B', // summary
@@ -135,146 +82,10 @@ export class GitLogParser {
 
 	static shortlog = '%H%x00%aN%x00%aE%x00%at';
 
-	static create<T extends Record<string, unknown>>(
-		fieldMapping: ExtractAll<T, string>,
-		options?: {
-			additionalArgs?: string[];
-			parseEntry?: (fields: IterableIterator<string>, entry: T) => void;
-			prefix?: string;
-			fieldPrefix?: string;
-			fieldSuffix?: string;
-			separator?: string;
-			skip?: number;
-		},
-	): Parser<T> {
-		let format = options?.prefix ?? '';
-		const keys: (keyof ExtractAll<T, string>)[] = [];
-		for (const key in fieldMapping) {
-			keys.push(key);
-			format += `${options?.fieldPrefix ?? ''}${fieldMapping[key]}${
-				options?.fieldSuffix ?? (options?.fieldPrefix == null ? '%x00' : '')
-			}`;
-		}
-
-		const args = ['-z', `--format=${format}`];
-		if (options?.additionalArgs != null && options.additionalArgs.length > 0) {
-			args.push(...options.additionalArgs);
-		}
-
-		function* parse(data: string): Generator<T> {
-			let entry: T = {} as any;
-			let fieldCount = 0;
-			let field;
-
-			const fields = getLines(data, options?.separator ?? '\0');
-			if (options?.skip) {
-				for (let i = 0; i < options.skip; i++) {
-					field = fields.next();
-				}
-			}
-
-			while (true) {
-				field = fields.next();
-				if (field.done) break;
-
-				entry[keys[fieldCount++]] = field.value as T[keyof T];
-
-				if (fieldCount === keys.length) {
-					fieldCount = 0;
-					field = fields.next();
-
-					options?.parseEntry?.(fields, entry);
-					yield entry;
-
-					entry = {} as any;
-				}
-			}
-		}
-
-		return { arguments: args, parse: parse };
-	}
-
-	static createSingle(field: string): Parser<string> {
-		const format = field;
-		const args = ['-z', `--format=${format}`];
-
-		function* parse(data: string): Generator<string> {
-			let field;
-
-			const fields = getLines(data, '\0');
-			while (true) {
-				field = fields.next();
-				if (field.done) break;
-
-				yield field.value;
-			}
-		}
-
-		return { arguments: args, parse: parse };
-	}
-
-	static createWithFiles<T extends Record<string, string>>(fieldMapping: T): ParserWithFiles<T> {
-		let format = '%x00%x00';
-		const keys: (keyof T)[] = [];
-		for (const key in fieldMapping) {
-			keys.push(key);
-			format += `%x00${fieldMapping[key]}`;
-		}
-
-		const args = ['-z', `--format=${format}`, '--name-status'];
-
-		function* parse(data: string): Generator<ParsedEntryWithFiles<T>> {
-			const records = getLines(data, '\0\0\0\0');
-
-			let entry: ParsedEntryWithFiles<T>;
-			let files: ParsedEntryFile[];
-			let fields: IterableIterator<string>;
-
-			let first = true;
-			for (let record of records) {
-				if (first) {
-					first = false;
-					// Fix the first record (since it only has 3 nulls)
-					record = record.slice(3);
-				}
-
-				entry = {} as any;
-				files = [];
-				fields = getLines(record, '\0');
-
-				let fieldCount = 0;
-				let field;
-				while (true) {
-					field = fields.next();
-					if (field.done) break;
-
-					if (fieldCount < keys.length) {
-						entry[keys[fieldCount++]] = field.value as ParsedEntryWithFiles<T>[keyof T];
-					} else {
-						const file: ParsedEntryFile = { status: field.value.trim(), path: undefined! };
-						field = fields.next();
-						file.path = field.value;
-
-						if (file.status[0] === 'R' || file.status[0] === 'C') {
-							field = fields.next();
-							file.originalPath = field.value;
-						}
-					}
-				}
-
-				entry.files = files;
-				yield entry;
-			}
-		}
-
-		return { arguments: args, parse: parse };
-	}
-
 	@debug({ args: false })
 	static parse(
-		container: Container,
 		data: string,
-		type: LogType,
+		type: GitCommitType,
 		repoPath: string | undefined,
 		fileName: string | undefined,
 		sha: string | undefined,
@@ -286,24 +97,26 @@ export class GitLogParser {
 		if (!data) return undefined;
 
 		let relativeFileName: string;
+		let recentCommit: GitLogCommit | undefined = undefined;
 
-		let entry: LogEntry = {};
+		let entry: LogEntry = emptyEntry;
 		let line: string | undefined = undefined;
 		let token: number;
 
 		let i = 0;
 		let first = true;
 
-		const lines = getLines(`${data}</f>`);
+		const lines = Strings.lines(`${data}</f>`);
 		// Skip the first line since it will always be </f>
 		let next = lines.next();
 		if (next.done) return undefined;
 
 		if (repoPath !== undefined) {
-			repoPath = normalizePath(repoPath);
+			repoPath = Strings.normalizePath(repoPath);
 		}
 
-		const commits = new Map<string, GitCommit>();
+		const authors = new Map<string, GitAuthor>();
+		const commits = new Map<string, GitLogCommit>();
 		let truncationCount = limit;
 
 		let match;
@@ -326,12 +139,12 @@ export class GitLogParser {
 			switch (token) {
 				case 114: // 'r': // ref
 					entry = {
-						sha: line.substring(4),
+						ref: line.substring(4),
 					};
 					break;
 
 				case 97: // 'a': // author
-					if (GitRevision.uncommitted === entry.sha) {
+					if (GitRevision.isUncommitted(entry.ref)) {
 						entry.author = 'You';
 					} else {
 						entry.author = line.substring(4);
@@ -339,19 +152,11 @@ export class GitLogParser {
 					break;
 
 				case 101: // 'e': // author-mail
-					entry.authorEmail = line.substring(4);
+					entry.email = line.substring(4);
 					break;
 
 				case 100: // 'd': // author-date
-					entry.authorDate = line.substring(4);
-					break;
-
-				case 110: // 'n': // committer
-					entry.committer = line.substring(4);
-					break;
-
-				case 109: // 'm': // committer-mail
-					entry.committedDate = line.substring(4);
+					entry.date = line.substring(4);
 					break;
 
 				case 99: // 'c': // committer-date
@@ -412,7 +217,7 @@ export class GitLogParser {
 
 						if (line.startsWith('warning:')) continue;
 
-						if (type === LogType.Log) {
+						if (type === GitCommitType.Log) {
 							match = fileStatusRegex.exec(line);
 							if (match != null) {
 								if (entry.files === undefined) {
@@ -423,22 +228,22 @@ export class GitLogParser {
 								if (renamedFileName !== undefined) {
 									entry.files.push({
 										status: match[1] as GitFileIndexStatus,
-										path: renamedFileName,
-										originalPath: match[2],
+										fileName: renamedFileName,
+										originalFileName: match[2],
 									});
 								} else {
 									entry.files.push({
 										status: match[1] as GitFileIndexStatus,
-										path: match[2],
+										fileName: match[2],
 									});
 								}
 							}
 						} else {
 							match = diffRegex.exec(line);
 							if (match != null) {
-								[, entry.originalPath, entry.path] = match;
-								if (entry.path === entry.originalPath) {
-									entry.originalPath = undefined;
+								[, entry.originalFileName, entry.fileName] = match;
+								if (entry.fileName === entry.originalFileName) {
+									entry.originalFileName = undefined;
 									entry.status = GitFileIndexStatus.Modified;
 								} else {
 									entry.status = GitFileIndexStatus.Renamed;
@@ -451,11 +256,14 @@ export class GitLogParser {
 								match = diffRangeRegex.exec(next.value);
 								if (match !== null) {
 									entry.line = {
-										sha: entry.sha!,
-										originalLine: parseInt(match[1], 10),
-										// count: parseInt(match[2], 10),
-										line: parseInt(match[3], 10),
-										// count: parseInt(match[4], 10),
+										from: {
+											line: parseInt(match[1], 10),
+											count: parseInt(match[2], 10),
+										},
+										to: {
+											line: parseInt(match[3], 10),
+											count: parseInt(match[4], 10),
+										},
 									};
 								}
 
@@ -469,15 +277,14 @@ export class GitLogParser {
 								match = fileStatusAndSummaryRegex.exec(`${line}\n${next.value}`);
 								if (match != null) {
 									entry.fileStats = {
-										additions: Number(match[1]) || 0,
+										insertions: Number(match[1]) || 0,
 										deletions: Number(match[2]) || 0,
-										changes: 0,
 									};
 
 									switch (match[4]) {
 										case undefined:
 											entry.status = 'M' as GitFileIndexStatus;
-											entry.path = match[3];
+											entry.fileName = match[3];
 											break;
 										case 'copy':
 										case 'rename':
@@ -488,34 +295,34 @@ export class GitLogParser {
 												fileStatusAndSummaryRenamedFilePathRegex.exec(renamedFileName);
 											if (renamedMatch != null) {
 												// If there is no new path, the path part was removed so ensure we don't end up with //
-												entry.path =
+												entry.fileName =
 													renamedMatch[3] === ''
 														? `${renamedMatch[1]}${renamedMatch[4]}`.replace('//', '/')
 														: `${renamedMatch[1]}${renamedMatch[3]}${renamedMatch[4]}`;
-												entry.originalPath = `${renamedMatch[1]}${renamedMatch[2]}${renamedMatch[4]}`;
+												entry.originalFileName = `${renamedMatch[1]}${renamedMatch[2]}${renamedMatch[4]}`;
 											} else {
 												renamedMatch =
 													fileStatusAndSummaryRenamedFileRegex.exec(renamedFileName);
 												if (renamedMatch != null) {
-													entry.path = renamedMatch[2];
-													entry.originalPath = renamedMatch[1];
+													entry.fileName = renamedMatch[2];
+													entry.originalFileName = renamedMatch[1];
 												} else {
-													entry.path = renamedFileName;
+													entry.fileName = renamedFileName;
 												}
 											}
 
 											break;
 										case 'create':
 											entry.status = 'A' as GitFileIndexStatus;
-											entry.path = match[3];
+											entry.fileName = match[3];
 											break;
 										case 'delete':
 											entry.status = 'D' as GitFileIndexStatus;
-											entry.path = match[3];
+											entry.fileName = match[3];
 											break;
 										default:
 											entry.status = 'M' as GitFileIndexStatus;
-											entry.path = match[3];
+											entry.fileName = match[3];
 											break;
 									}
 								}
@@ -526,21 +333,26 @@ export class GitLogParser {
 					}
 
 					if (entry.files !== undefined) {
-						entry.path = filterMap(entry.files, f => (f.path ? f.path : undefined)).join(', ');
+						entry.fileName = Arrays.filterMap(entry.files, f => (f.fileName ? f.fileName : undefined)).join(
+							', ',
+						);
 					}
 
-					if (first && repoPath === undefined && type === LogType.LogFile && fileName !== undefined) {
+					if (first && repoPath === undefined && type === GitCommitType.LogFile && fileName !== undefined) {
 						// Try to get the repoPath from the most recent commit
-						repoPath = normalizePath(
-							fileName.replace(fileName.startsWith('/') ? `/${entry.path}` : entry.path!, ''),
+						repoPath = Strings.normalizePath(
+							fileName.replace(
+								fileName.startsWith(slash) ? `/${entry.fileName}` : entry.fileName!,
+								emptyStr,
+							),
 						);
-						relativeFileName = normalizePath(relative(repoPath, fileName));
+						relativeFileName = Strings.normalizePath(paths.relative(repoPath, fileName));
 					} else {
-						relativeFileName = entry.path!;
+						relativeFileName = entry.fileName!;
 					}
 					first = false;
 
-					const commit = commits.get(entry.sha!);
+					const commit = commits.get(entry.ref!);
 					if (commit === undefined) {
 						i++;
 						if (limit && i > limit) break loop;
@@ -549,14 +361,15 @@ export class GitLogParser {
 						truncationCount--;
 					}
 
-					GitLogParser.parseEntry(
-						container,
+					recentCommit = GitLogParser.parseEntry(
 						entry,
 						commit,
 						type,
 						repoPath,
 						relativeFileName,
 						commits,
+						authors,
+						recentCommit,
 						currentUser,
 					);
 
@@ -567,6 +380,7 @@ export class GitLogParser {
 
 		const log: GitLog = {
 			repoPath: repoPath!,
+			authors: authors,
 			commits: commits,
 			sha: sha,
 			count: i,
@@ -578,64 +392,131 @@ export class GitLogParser {
 	}
 
 	private static parseEntry(
-		container: Container,
 		entry: LogEntry,
-		commit: GitCommit | undefined,
-		type: LogType,
+		commit: GitLogCommit | undefined,
+		type: GitCommitType,
 		repoPath: string | undefined,
 		relativeFileName: string,
-		commits: Map<string, GitCommit>,
-		currentUser: GitUser | undefined,
-	): void {
-		if (commit == null) {
-			if (entry.author != null) {
-				if (isUserMatch(currentUser, entry.author, entry.authorEmail)) {
+		commits: Map<string, GitLogCommit>,
+		authors: Map<string, GitAuthor>,
+		recentCommit: GitLogCommit | undefined,
+		currentUser: { name?: string; email?: string } | undefined,
+	): GitLogCommit | undefined {
+		if (commit === undefined) {
+			if (entry.author !== undefined) {
+				if (
+					currentUser !== undefined &&
+					// Name or e-mail is configured
+					(currentUser.name !== undefined || currentUser.email !== undefined) &&
+					// Match on name if configured
+					(currentUser.name === undefined || currentUser.name === entry.author) &&
+					// Match on email if configured
+					(currentUser.email === undefined || currentUser.email === entry.email)
+				) {
 					entry.author = 'You';
 				}
-			}
 
-			if (entry.committer != null) {
-				if (isUserMatch(currentUser, entry.committer, entry.committerEmail)) {
-					entry.committer = 'You';
+				let author = authors.get(entry.author);
+				if (author === undefined) {
+					author = {
+						name: entry.author,
+						lineCount: 0,
+					};
+					authors.set(entry.author, author);
 				}
 			}
 
-			const originalFileName = entry.originalPath ?? (relativeFileName !== entry.path ? entry.path : undefined);
+			const originalFileName =
+				entry.originalFileName ?? (relativeFileName !== entry.fileName ? entry.fileName : undefined);
 
-			const files: { file?: GitFileChange; files?: GitFileChange[] } = {
-				files: entry.files?.map(f => new GitFileChange(repoPath!, f.path, f.status, f.originalPath)),
-			};
-			if (type === LogType.LogFile) {
-				files.file = new GitFileChange(
-					repoPath!,
-					relativeFileName,
-					entry.status!,
-					originalFileName,
-					undefined,
-					entry.fileStats,
-				);
+			if (type === GitCommitType.LogFile) {
+				entry.files = [
+					{
+						status: entry.status!,
+						fileName: relativeFileName,
+						originalFileName: originalFileName,
+					},
+				];
 			}
 
-			commit = new GitCommit(
-				container,
+			commit = new GitLogCommit(
+				type,
 				repoPath!,
-				entry.sha!,
-				new GitCommitIdentity(entry.author!, entry.authorEmail, new Date((entry.authorDate! as any) * 1000)),
-				new GitCommitIdentity(
-					entry.committer!,
-					entry.committerEmail,
-					new Date((entry.committedDate! as any) * 1000),
-				),
-				entry.summary?.split('\n', 1)[0] ?? '',
-				entry.parentShas ?? [],
-				entry.summary ?? '',
-				files,
+				entry.ref!,
+				entry.author!,
+				entry.email,
+				new Date((entry.date! as any) * 1000),
+				new Date((entry.committedDate! as any) * 1000),
+				entry.summary === undefined ? emptyStr : entry.summary,
+				relativeFileName,
+				entry.files ?? [],
+				entry.status,
+				originalFileName,
+				type === GitCommitType.Log ? entry.parentShas![0] : undefined,
 				undefined,
-				entry.line != null ? [entry.line] : [],
+				entry.fileStats,
+				entry.parentShas,
+				entry.line,
 			);
 
-			commits.set(entry.sha!, commit);
+			commits.set(entry.ref!, commit);
 		}
+		// else {
+		//     Logger.log(`merge commit? ${entry.sha}`);
+		// }
+
+		if (recentCommit !== undefined) {
+			// If the commit sha's match (merge commit), just forward it along
+			commit.nextSha = commit.sha !== recentCommit.sha ? recentCommit.sha : recentCommit.nextSha;
+
+			// Only add a filename if this is a file log
+			if (type === GitCommitType.LogFile) {
+				recentCommit.previousFileName = commit.originalFileName ?? commit.fileName;
+				commit.nextFileName = recentCommit.originalFileName ?? recentCommit.fileName;
+			}
+		}
+		return commit;
+	}
+
+	@debug({ args: false })
+	static parseLastRefOnly(data: string): string | undefined {
+		let ref;
+		let match;
+		do {
+			match = logRefsRegex.exec(data);
+			if (match == null) break;
+
+			[, ref] = match;
+		} while (true);
+
+		// Ensure the regex state is reset
+		logRefsRegex.lastIndex = 0;
+
+		return ref;
+	}
+
+	@debug({ args: false })
+	static parseRefsOnly(data: string): string[] {
+		const refs = [];
+
+		let ref;
+		let match;
+		do {
+			match = logRefsRegex.exec(data);
+			if (match == null) break;
+
+			[, ref] = match;
+
+			if (ref == null || ref.length === 0) continue;
+
+			// Stops excessive memory usage -- https://bugs.chromium.org/p/v8/issues/detail?id=2869
+			refs.push(` ${ref}`.substr(1));
+		} while (true);
+
+		// Ensure the regex state is reset
+		logRefsRegex.lastIndex = 0;
+
+		return refs;
 	}
 
 	@debug({ args: false })

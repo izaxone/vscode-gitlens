@@ -1,12 +1,11 @@
+'use strict';
 import { TextDocumentShowOptions, TextEditor, Uri, window } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
+import { GitRevision } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitRevision } from '../git/models';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command, executeCommand } from '../system/command';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { ActiveEditorCommand, command, Commands, executeCommand, getCommandUri } from './common';
 import { DiffWithCommandArgs } from './diffWith';
 
 export interface DiffWithWorkingCommandArgs {
@@ -18,7 +17,7 @@ export interface DiffWithWorkingCommandArgs {
 
 @command()
 export class DiffWithWorkingCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.DiffWithWorking, Commands.DiffWithWorkingInDiffLeft, Commands.DiffWithWorkingInDiffRight]);
 	}
 
@@ -39,11 +38,7 @@ export class DiffWithWorkingCommand extends ActiveEditorCommand {
 
 		if (args.inDiffRightEditor) {
 			try {
-				const diffUris = await this.container.git.getPreviousComparisonUris(
-					gitUri.repoPath!,
-					gitUri,
-					gitUri.sha,
-				);
+				const diffUris = await Container.git.getPreviousDiffUris(gitUri.repoPath!, gitUri, gitUri.sha, 0);
 				gitUri = diffUris?.previous ?? gitUri;
 			} catch (ex) {
 				Logger.error(
@@ -71,7 +66,7 @@ export class DiffWithWorkingCommand extends ActiveEditorCommand {
 
 		// If we are a fake "staged" sha, check the status
 		if (gitUri.isUncommittedStaged) {
-			const status = await this.container.git.getStatusForFile(gitUri.repoPath!, gitUri);
+			const status = await Container.git.getStatusForFile(gitUri.repoPath!, gitUri.fsPath);
 			if (status?.indexStatus != null) {
 				void (await executeCommand<DiffWithCommandArgs>(Commands.DiffWith, {
 					repoPath: gitUri.repoPath,
@@ -93,7 +88,7 @@ export class DiffWithWorkingCommand extends ActiveEditorCommand {
 
 		uri = gitUri.toFileUri();
 
-		const workingUri = await this.container.git.getWorkingUri(gitUri.repoPath!, uri);
+		const workingUri = await Container.git.getWorkingUri(gitUri.repoPath!, uri);
 		if (workingUri == null) {
 			void window.showWarningMessage('Unable to open compare. File has been deleted from the working tree');
 

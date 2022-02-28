@@ -1,17 +1,10 @@
-import type { Container } from '../../container';
-import { debug } from '../../system/decorators/log';
-import { getLines } from '../../system/string';
-import {
-	GitBlame,
-	GitBlameAuthor,
-	GitCommit,
-	GitCommitIdentity,
-	GitCommitLine,
-	GitFileChange,
-	GitFileIndexStatus,
-	GitRevision,
-	GitUser,
-} from '../models';
+'use strict';
+import * as paths from 'path';
+import { debug, Strings } from '../../system';
+import { GitAuthor, GitBlame, GitBlameCommit, GitCommitLine, GitRevision, GitUser } from '../git';
+
+const emptyStr = '';
+const slash = '/';
 
 interface BlameEntry {
 	sha: string;
@@ -25,15 +18,13 @@ interface BlameEntry {
 	authorTimeZone?: string;
 	authorEmail?: string;
 
-	committer: string;
 	committerDate?: string;
 	committerTimeZone?: string;
-	committerEmail?: string;
 
 	previousSha?: string;
-	previousPath?: string;
+	previousFileName?: string;
 
-	path: string;
+	fileName?: string;
 
 	summary?: string;
 }
@@ -41,55 +32,57 @@ interface BlameEntry {
 export class GitBlameParser {
 	@debug({ args: false, singleLine: true })
 	static parse(
-		container: Container,
 		data: string,
-		repoPath: string,
+		repoPath: string | undefined,
+		fileName: string,
 		currentUser: GitUser | undefined,
 	): GitBlame | undefined {
 		if (!data) return undefined;
 
-		const authors = new Map<string, GitBlameAuthor>();
-		const commits = new Map<string, GitCommit>();
+		const authors = new Map<string, GitAuthor>();
+		const commits = new Map<string, GitBlameCommit>();
 		const lines: GitCommitLine[] = [];
 
+		let relativeFileName;
+
 		let entry: BlameEntry | undefined = undefined;
-		let key: string;
 		let line: string;
 		let lineParts: string[];
 
-		for (line of getLines(data)) {
+		let first = true;
+
+		for (line of Strings.lines(data)) {
 			lineParts = line.split(' ');
 			if (lineParts.length < 2) continue;
 
-			[key] = lineParts;
-			if (entry == null) {
-				// eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+			if (entry === undefined) {
 				entry = {
-					sha: key,
+					author: undefined!,
+					sha: lineParts[0],
 					originalLine: parseInt(lineParts[1], 10),
 					line: parseInt(lineParts[2], 10),
 					lineCount: parseInt(lineParts[3], 10),
-				} as BlameEntry;
+				};
 
 				continue;
 			}
 
-			switch (key) {
+			switch (lineParts[0]) {
 				case 'author':
-					if (entry.sha === GitRevision.uncommitted) {
+					if (GitRevision.isUncommitted(entry.sha)) {
 						entry.author = 'You';
 					} else {
-						entry.author = line.slice(key.length + 1).trim();
+						entry.author = lineParts.slice(1).join(' ').trim();
 					}
 					break;
 
 				case 'author-mail': {
-					if (entry.sha === GitRevision.uncommitted) {
-						entry.authorEmail = currentUser?.email;
+					if (GitRevision.isUncommitted(entry.sha)) {
+						entry.authorEmail = currentUser !== undefined ? currentUser.email : undefined;
 						continue;
 					}
 
-					entry.authorEmail = line.slice(key.length + 1).trim();
+					entry.authorEmail = lineParts.slice(1).join(' ').trim();
 					const start = entry.authorEmail.indexOf('<');
 					if (start >= 0) {
 						const end = entry.authorEmail.indexOf('>', start);
@@ -110,33 +103,6 @@ export class GitBlameParser {
 					entry.authorTimeZone = lineParts[1];
 					break;
 
-				case 'committer':
-					if (GitRevision.isUncommitted(entry.sha)) {
-						entry.committer = 'You';
-					} else {
-						entry.committer = line.slice(key.length + 1).trim();
-					}
-					break;
-
-				case 'committer-mail': {
-					if (GitRevision.isUncommitted(entry.sha)) {
-						entry.committerEmail = currentUser?.email;
-						continue;
-					}
-
-					entry.committerEmail = line.slice(key.length + 1).trim();
-					const start = entry.committerEmail.indexOf('<');
-					if (start >= 0) {
-						const end = entry.committerEmail.indexOf('>', start);
-						if (end > start) {
-							entry.committerEmail = entry.committerEmail.substring(start + 1, end);
-						} else {
-							entry.committerEmail = entry.committerEmail.substring(start + 1);
-						}
-					}
-
-					break;
-				}
 				case 'committer-time':
 					entry.committerDate = lineParts[1];
 					break;
@@ -146,20 +112,32 @@ export class GitBlameParser {
 					break;
 
 				case 'summary':
-					entry.summary = line.slice(key.length + 1).trim();
+					entry.summary = lineParts.slice(1).join(' ').trim();
 					break;
 
 				case 'previous':
 					entry.previousSha = lineParts[1];
-					entry.previousPath = lineParts.slice(2).join(' ');
+					entry.previousFileName = lineParts.slice(2).join(' ');
 					break;
 
 				case 'filename':
-					// Don't trim to allow spaces in the filename
-					entry.path = line.slice(key.length + 1);
+					entry.fileName = lineParts.slice(1).join(' ');
 
-					// Since the filename marks the end of a commit, parse the entry and clear it for the next
-					GitBlameParser.parseEntry(container, entry, repoPath, commits, authors, lines, currentUser);
+					if (first && repoPath === undefined) {
+						// Try to get the repoPath from the most recent commit
+						repoPath = Strings.normalizePath(
+							fileName.replace(
+								fileName.startsWith(slash) ? `/${entry.fileName}` : entry.fileName,
+								emptyStr,
+							),
+						);
+						relativeFileName = Strings.normalizePath(paths.relative(repoPath, fileName));
+					} else {
+						relativeFileName = entry.fileName;
+					}
+					first = false;
+
+					GitBlameParser.parseEntry(entry, repoPath, relativeFileName, commits, authors, lines, currentUser);
 
 					entry = undefined;
 					break;
@@ -170,10 +148,10 @@ export class GitBlameParser {
 		}
 
 		for (const [, c] of commits) {
-			if (!c.author.name) continue;
+			if (c.author === undefined) return undefined;
 
-			const author = authors.get(c.author.name);
-			if (author == undefined) return undefined;
+			const author = authors.get(c.author);
+			if (author === undefined) return undefined;
 
 			author.lineCount += c.lines.length;
 		}
@@ -181,7 +159,7 @@ export class GitBlameParser {
 		const sortedAuthors = new Map([...authors.entries()].sort((a, b) => b[1].lineCount - a[1].lineCount));
 
 		const blame: GitBlame = {
-			repoPath: repoPath,
+			repoPath: repoPath!,
 			authors: sortedAuthors,
 			commits: commits,
 			lines: lines,
@@ -190,31 +168,31 @@ export class GitBlameParser {
 	}
 
 	private static parseEntry(
-		container: Container,
 		entry: BlameEntry,
-		repoPath: string,
-		commits: Map<string, GitCommit>,
-		authors: Map<string, GitBlameAuthor>,
+		repoPath: string | undefined,
+		relativeFileName: string,
+		commits: Map<string, GitBlameCommit>,
+		authors: Map<string, GitAuthor>,
 		lines: GitCommitLine[],
 		currentUser: { name?: string; email?: string } | undefined,
 	) {
 		let commit = commits.get(entry.sha);
-		if (commit == null) {
-			if (entry.author != null) {
+		if (commit === undefined) {
+			if (entry.author !== undefined) {
 				if (
-					currentUser != null &&
+					currentUser !== undefined &&
 					// Name or e-mail is configured
-					(currentUser.name != null || currentUser.email != null) &&
+					(currentUser.name !== undefined || currentUser.email !== undefined) &&
 					// Match on name if configured
-					(currentUser.name == null || currentUser.name === entry.author) &&
+					(currentUser.name === undefined || currentUser.name === entry.author) &&
 					// Match on email if configured
-					(currentUser.email == null || currentUser.email === entry.authorEmail)
+					(currentUser.email === undefined || currentUser.email === entry.authorEmail)
 				) {
 					entry.author = 'You';
 				}
 
 				let author = authors.get(entry.author);
-				if (author == null) {
+				if (author === undefined) {
 					author = {
 						name: entry.author,
 						lineCount: 0,
@@ -223,27 +201,20 @@ export class GitBlameParser {
 				}
 			}
 
-			commit = new GitCommit(
-				container,
-				repoPath,
+			commit = new GitBlameCommit(
+				repoPath!,
 				entry.sha,
-				new GitCommitIdentity(entry.author, entry.authorEmail, new Date((entry.authorDate as any) * 1000)),
-				new GitCommitIdentity(
-					entry.committer,
-					entry.committerEmail,
-					new Date((entry.committerDate as any) * 1000),
-				),
+				entry.author,
+				entry.authorEmail,
+				new Date((entry.authorDate as any) * 1000),
+				new Date((entry.committerDate as any) * 1000),
 				entry.summary!,
-				[],
-				undefined,
-				new GitFileChange(
-					repoPath,
-					entry.path,
-					GitFileIndexStatus.Modified,
-					entry.previousPath && entry.previousPath !== entry.path ? entry.previousPath : undefined,
-					entry.previousSha,
-				),
-				undefined,
+				relativeFileName,
+				entry.previousFileName !== undefined && entry.previousFileName !== entry.fileName
+					? entry.previousFileName
+					: undefined,
+				entry.previousSha,
+				entry.previousSha && entry.previousFileName,
 				[],
 			);
 
@@ -253,10 +224,13 @@ export class GitBlameParser {
 		for (let i = 0, len = entry.lineCount; i < len; i++) {
 			const line: GitCommitLine = {
 				sha: entry.sha,
-				previousSha: commit.file!.previousSha,
-				originalLine: entry.originalLine + i,
 				line: entry.line + i,
+				originalLine: entry.originalLine + i,
 			};
+
+			if (commit.previousSha) {
+				line.previousSha = commit.previousSha;
+			}
 
 			commit.lines.push(line);
 			lines[line.line - 1] = line;

@@ -1,15 +1,15 @@
+'use strict';
+import { WorkspaceState } from '../../constants';
 import { Container } from '../../container';
-import { WorkspaceStorageKeys } from '../../storage';
-import { sortCompare } from '../../system/string';
-import { RemoteProvider, RichRemoteProvider } from '../remotes/provider';
+import { RemoteProvider, RichRemoteProvider } from '../remotes/factory';
 
-export const enum GitRemoteType {
+export enum GitRemoteType {
 	Fetch = 'fetch',
 	Push = 'push',
 }
 
 export class GitRemote<TProvider extends RemoteProvider | undefined = RemoteProvider | RichRemoteProvider | undefined> {
-	static getHighlanderProviders(remotes: GitRemote<RemoteProvider | RichRemoteProvider>[]) {
+	static getHighlanderProviders(remotes: GitRemote<RemoteProvider>[]) {
 		if (remotes.length === 0) return undefined;
 
 		const remote = remotes.length === 1 ? remotes[0] : remotes.find(r => r.default);
@@ -21,7 +21,7 @@ export class GitRemote<TProvider extends RemoteProvider | undefined = RemoteProv
 		return undefined;
 	}
 
-	static getHighlanderProviderName(remotes: GitRemote<RemoteProvider | RichRemoteProvider>[]) {
+	static getHighlanderProviderName(remotes: GitRemote<RemoteProvider>[]) {
 		if (remotes.length === 0) return undefined;
 
 		const remote = remotes.length === 1 ? remotes[0] : remotes.find(r => r.default);
@@ -43,7 +43,7 @@ export class GitRemote<TProvider extends RemoteProvider | undefined = RemoteProv
 			(a, b) =>
 				(a.default ? -1 : 1) - (b.default ? -1 : 1) ||
 				(a.name === 'origin' ? -1 : 1) - (b.name === 'origin' ? -1 : 1) ||
-				sortCompare(a.name, b.name),
+				a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
 		);
 	}
 
@@ -59,7 +59,7 @@ export class GitRemote<TProvider extends RemoteProvider | undefined = RemoteProv
 	) {}
 
 	get default() {
-		const defaultRemote = Container.instance.storage.getWorkspace<string>(WorkspaceStorageKeys.DefaultRemote);
+		const defaultRemote = Container.context.workspaceState.get<string>(WorkspaceState.DefaultRemote);
 		return this.id === defaultRemote;
 	}
 
@@ -78,20 +78,13 @@ export class GitRemote<TProvider extends RemoteProvider | undefined = RemoteProv
 		return bestUrl!;
 	}
 
-	hasRichProvider(): this is GitRemote<RichRemoteProvider> {
-		return RichRemoteProvider.is(this.provider);
-	}
-
 	async setAsDefault(state: boolean = true, updateViews: boolean = true) {
-		void (await Container.instance.storage.storeWorkspace(
-			WorkspaceStorageKeys.DefaultRemote,
-			state ? this.id : undefined,
-		));
+		void (await Container.context.workspaceState.update(WorkspaceState.DefaultRemote, state ? this.id : undefined));
 
 		// TODO@eamodio this is UGLY
 		if (updateViews) {
-			void (await Container.instance.remotesView.refresh());
-			void (await Container.instance.repositoriesView.refresh());
+			void (await Container.remotesView.refresh());
+			void (await Container.repositoriesView.refresh());
 		}
 	}
 }

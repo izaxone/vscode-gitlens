@@ -1,5 +1,7 @@
+'use strict';
 import {
 	CancellationToken,
+	commands,
 	ConfigurationChangeEvent,
 	Disposable,
 	Event,
@@ -29,15 +31,10 @@ import {
 	viewsCommonConfigKeys,
 	viewsConfigKeys,
 	ViewsConfigKeys,
-	WorktreesViewConfig,
 } from '../configuration';
 import { Container } from '../container';
 import { Logger } from '../logger';
-import { executeCommand } from '../system/command';
-import { debug, log } from '../system/decorators/log';
-import { once } from '../system/event';
-import { debounce } from '../system/function';
-import { cancellable, isPromise } from '../system/promise';
+import { debug, Functions, log, Promises } from '../system';
 import { BranchesView } from './branchesView';
 import { CommitsView } from './commitsView';
 import { ContributorsView } from './contributorsView';
@@ -49,7 +46,6 @@ import { RepositoriesView } from './repositoriesView';
 import { SearchAndCompareView } from './searchAndCompareView';
 import { StashesView } from './stashesView';
 import { TagsView } from './tagsView';
-import { WorktreesView } from './worktreesView';
 
 export type View =
 	| BranchesView
@@ -61,10 +57,22 @@ export type View =
 	| RepositoriesView
 	| SearchAndCompareView
 	| StashesView
-	| TagsView
-	| WorktreesView;
-export type ViewsWithCommits = Exclude<View, FileHistoryView | LineHistoryView | StashesView>;
-export type ViewsWithRepositoryFolders = Exclude<View, RepositoriesView | FileHistoryView | LineHistoryView>;
+	| TagsView;
+export type ViewsWithCommits =
+	| BranchesView
+	| CommitsView
+	| ContributorsView
+	| RemotesView
+	| RepositoriesView
+	| SearchAndCompareView
+	| TagsView;
+export type ViewsWithPullRequests =
+	| BranchesView
+	| CommitsView
+	| ContributorsView
+	| RemotesView
+	| RepositoriesView
+	| SearchAndCompareView;
 
 export interface TreeViewNodeCollapsibleStateChangeEvent<T> extends TreeViewExpansionEvent<T> {
 	state: TreeItemCollapsibleState;
@@ -82,8 +90,7 @@ export abstract class ViewBase<
 		| RepositoriesViewConfig
 		| SearchAndCompareViewConfig
 		| StashesViewConfig
-		| TagsViewConfig
-		| WorktreesViewConfig,
+		| TagsViewConfig,
 > implements TreeDataProvider<ViewNode>, Disposable
 {
 	protected _onDidChangeTreeData = new EventEmitter<ViewNode | undefined>();
@@ -107,14 +114,8 @@ export abstract class ViewBase<
 
 	private readonly _lastKnownLimits = new Map<string, number | undefined>();
 
-	constructor(
-		public readonly id: `gitlens.views.${string}`,
-		public readonly name: string,
-		public readonly container: Container,
-	) {
-		this.disposables.push(once(container.onReady)(this.onReady, this));
-
-		if (this.container.debugging || this.container.config.debug) {
+	constructor(public readonly id: string, public readonly name: string) {
+		if (Logger.isDebugging || Container.config.debug) {
 			function addDebuggingInfo(item: TreeItem, node: ViewNode, parent: ViewNode | undefined) {
 				if (item.tooltip == null) {
 					item.tooltip = new MarkdownString(
@@ -163,19 +164,10 @@ export abstract class ViewBase<
 		}
 
 		this.disposables.push(...this.registerCommands());
-	}
 
-	dispose() {
-		Disposable.from(...this.disposables).dispose();
-	}
-
-	private onReady() {
 		this.initialize({ showCollapseAll: this.showCollapseAll });
-		queueMicrotask(() => this.onConfigurationChanged());
-	}
 
-	get canReveal(): boolean {
-		return true;
+		setImmediate(() => this.onConfigurationChanged());
 	}
 
 	protected get showCollapseAll(): boolean {
@@ -192,6 +184,11 @@ export abstract class ViewBase<
 
 		return false;
 	}
+
+	dispose() {
+		Disposable.from(...this.disposables).dispose();
+	}
+
 	private _title: string | undefined;
 	get title(): string | undefined {
 		return this._title;
@@ -250,7 +247,7 @@ export abstract class ViewBase<
 				this.onConfigurationChanged(e);
 			}, this),
 			this.tree,
-			this.tree.onDidChangeVisibility(debounce(this.onVisibilityChanged, 250), this),
+			this.tree.onDidChangeVisibility(Functions.debounce(this.onVisibilityChanged, 250), this),
 			this.tree.onDidCollapseElement(this.onElementCollapsed, this),
 			this.tree.onDidExpandElement(this.onElementExpanded, this),
 		);
@@ -281,7 +278,7 @@ export abstract class ViewBase<
 	}
 
 	resolveTreeItem(item: TreeItem, node: ViewNode): TreeItem | Promise<TreeItem> {
-		return node.resolveTreeItem?.(item) ?? item;
+		return node.resolveTreeItem(item);
 	}
 
 	protected onElementCollapsed(e: TreeViewExpansionEvent<ViewNode>) {
@@ -296,14 +293,14 @@ export abstract class ViewBase<
 		this._onDidChangeVisibility.fire(e);
 	}
 
-	get selection(): readonly ViewNode[] {
+	get selection(): ViewNode[] {
 		if (this.tree == null || this.root == null) return [];
 
 		return this.tree.selection;
 	}
 
 	get visible(): boolean {
-		return this.tree?.visible ?? false;
+		return this.tree != null ? this.tree.visible : false;
 	}
 
 	async findNode(
@@ -324,10 +321,16 @@ export abstract class ViewBase<
 			token?: CancellationToken;
 		},
 	): Promise<ViewNode | undefined>;
-	@log<ViewBase<RootNode, ViewConfig>['findNode']>({
+	@log({
 		args: {
-			0: predicate => (typeof predicate === 'string' ? predicate : '<function>'),
-			1: opts => `options=${JSON.stringify({ ...opts, canTraverse: undefined, token: undefined })}`,
+			0: (predicate: string | ((node: ViewNode) => boolean)) =>
+				typeof predicate === 'string' ? predicate : 'function',
+			1: (opts: {
+				allowPaging?: boolean;
+				canTraverse?: (node: ViewNode) => boolean | Promise<boolean>;
+				maxDepth?: number;
+				token?: CancellationToken;
+			}) => `options=${JSON.stringify({ ...opts, canTraverse: undefined, token: undefined })}`,
 		},
 	})
 	async findNode(
@@ -368,8 +371,8 @@ export abstract class ViewBase<
 
 		// If we have no root (e.g. never been initialized) force it so the tree will load properly
 		await this.show({ preserveFocus: true });
-		// Since we have to show the view, give the view time to load and let the callstack unwind before we try to find the node
-		return new Promise<ViewNode | undefined>(resolve => setTimeout(() => resolve(find.call(this)), 100));
+		// Since we have to show the view, let the callstack unwind before we try to find the node
+		return new Promise<ViewNode | undefined>(resolve => setTimeout(() => resolve(find.call(this)), 0));
 	}
 
 	private async findNodeCoreBFS(
@@ -382,7 +385,7 @@ export abstract class ViewBase<
 	): Promise<ViewNode | undefined> {
 		const queue: (ViewNode | undefined)[] = [root, undefined];
 
-		const defaultPageSize = this.container.config.advanced.maxListItems;
+		const defaultPageSize = Container.config.advanced.maxListItems;
 
 		let depth = 0;
 		let node: ViewNode | undefined;
@@ -404,7 +407,7 @@ export abstract class ViewBase<
 			if (predicate(node)) return node;
 			if (canTraverse != null) {
 				const traversable = canTraverse(node);
-				if (isPromise(traversable)) {
+				if (Promises.is(traversable)) {
 					if (!(await traversable)) continue;
 				} else if (!traversable) {
 					continue;
@@ -428,9 +431,13 @@ export abstract class ViewBase<
 
 						await this.loadMoreNodeChildren(node, defaultPageSize);
 
-						pagedChildren = await cancellable(Promise.resolve(node.getChildren()), token ?? 60000, {
-							onDidCancel: resolve => resolve([]),
-						});
+						pagedChildren = await Promises.cancellable(
+							Promise.resolve(node.getChildren()),
+							token ?? 60000,
+							{
+								onDidCancel: resolve => resolve([]),
+							},
+						);
 
 						child = pagedChildren.find(predicate);
 						if (child != null) return child;
@@ -484,7 +491,9 @@ export abstract class ViewBase<
 		this.triggerNodeChange();
 	}
 
-	@debug<ViewBase<RootNode, ViewConfig>['refreshNode']>({ args: { 0: n => n.toString() } })
+	@debug({
+		args: { 0: (n: ViewNode) => n.toString() },
+	})
 	async refreshNode(node: ViewNode, reset: boolean = false, force: boolean = false) {
 		const cancel = await node.refresh?.(reset);
 		if (!force && cancel === true) return;
@@ -492,7 +501,9 @@ export abstract class ViewBase<
 		this.triggerNodeChange(node);
 	}
 
-	@log<ViewBase<RootNode, ViewConfig>['reveal']>({ args: { 0: n => n.toString() } })
+	@log({
+		args: { 0: (n: ViewNode) => n.toString() },
+	})
 	async reveal(
 		node: ViewNode,
 		options?: {
@@ -512,12 +523,10 @@ export abstract class ViewBase<
 
 	@log()
 	async show(options?: { preserveFocus?: boolean }) {
-		const cc = Logger.getCorrelationContext();
-
 		try {
-			void (await executeCommand(`${this.id}.focus`, options));
+			void (await commands.executeCommand(`${this.id}.focus`, options));
 		} catch (ex) {
-			Logger.error(ex, cc);
+			Logger.error(ex);
 		}
 	}
 
@@ -526,32 +535,33 @@ export abstract class ViewBase<
 		return this._lastKnownLimits.get(node.id);
 	}
 
-	@debug<ViewBase<RootNode, ViewConfig>['loadMoreNodeChildren']>({
-		args: { 0: n => n.toString(), 2: n => n?.toString() },
+	@debug({
+		args: {
+			0: (n: ViewNode & PageableViewNode) => n.toString(),
+			3: (n?: ViewNode) => (n == null ? '' : n.toString()),
+		},
 	})
 	async loadMoreNodeChildren(
 		node: ViewNode & PageableViewNode,
-		limit: number | { until: string | undefined } | undefined,
+		limit: number | { until: any } | undefined,
 		previousNode?: ViewNode,
-		context?: Record<string, unknown>,
 	) {
 		if (previousNode != null) {
 			void (await this.reveal(previousNode, { select: true }));
 		}
 
-		await node.loadMore(limit, context);
+		await node.loadMore(limit);
 		this._lastKnownLimits.set(node.id, node.limit);
 	}
 
-	@debug<ViewBase<RootNode, ViewConfig>['resetNodeLastKnownLimit']>({
-		args: { 0: n => n.toString() },
-		singleLine: true,
-	})
+	@debug({ args: { 0: (n: ViewNode) => n.toString() }, singleLine: true })
 	resetNodeLastKnownLimit(node: PageableViewNode) {
 		this._lastKnownLimits.delete(node.id);
 	}
 
-	@debug<ViewBase<RootNode, ViewConfig>['triggerNodeChange']>({ args: { 0: n => n?.toString() } })
+	@debug({
+		args: { 0: (n: ViewNode) => (n != null ? n.toString() : '') },
+	})
 	triggerNodeChange(node?: ViewNode) {
 		// Since the root node won't actually refresh, force everything
 		this._onDidChangeTreeData.fire(node != null && node !== this.root ? node : undefined);
@@ -562,15 +572,12 @@ export abstract class ViewBase<
 	private _config: (ViewConfig & ViewsCommonConfig) | undefined;
 	get config(): ViewConfig & ViewsCommonConfig {
 		if (this._config == null) {
-			const cfg = { ...this.container.config.views };
+			const cfg = { ...Container.config.views };
 			for (const view of viewsConfigKeys) {
 				delete cfg[view];
 			}
 
-			this._config = {
-				...(cfg as ViewsCommonConfig),
-				...(this.container.config.views[this.configKey] as ViewConfig),
-			};
+			this._config = { ...(cfg as ViewsCommonConfig), ...(Container.config.views[this.configKey] as ViewConfig) };
 		}
 
 		return this._config;

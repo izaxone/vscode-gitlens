@@ -1,14 +1,30 @@
-import { Command, MarkdownString, ThemeColor, ThemeIcon, TreeItem, TreeItemCollapsibleState, Uri } from 'vscode';
-import type { DiffWithPreviousCommandArgs } from '../../commands';
+'use strict';
+import * as paths from 'path';
+import {
+	Command,
+	commands,
+	MarkdownString,
+	ThemeColor,
+	ThemeIcon,
+	TreeItem,
+	TreeItemCollapsibleState,
+	Uri,
+} from 'vscode';
+import { Commands, DiffWithPreviousCommandArgs } from '../../commands';
 import { ViewFilesLayout } from '../../configuration';
-import { Commands, CoreCommands } from '../../constants';
-import { CommitFormatter } from '../../git/formatters';
+import { BuiltInCommands, GlyphChars } from '../../constants';
+import { Container } from '../../container';
+import {
+	CommitFormatter,
+	GitBranch,
+	GitLogCommit,
+	GitRebaseStatus,
+	GitReference,
+	GitRevisionReference,
+	GitStatus,
+} from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitBranch, GitCommit, GitRebaseStatus, GitReference, GitRevisionReference, GitStatus } from '../../git/models';
-import { makeHierarchical } from '../../system/array';
-import { executeCoreCommand } from '../../system/command';
-import { joinPaths, normalizePath } from '../../system/path';
-import { pluralize, sortCompare } from '../../system/string';
+import { Arrays, Strings } from '../../system';
 import { ViewsWithCommits } from '../viewBase';
 import { BranchNode } from './branchNode';
 import { CommitFileNode } from './commitFileNode';
@@ -47,20 +63,22 @@ export class RebaseStatusNode extends ViewNode<ViewsWithCommits> {
 			this.status?.conflicts.map(f => new MergeConflictFileNode(this.view, this, this.rebaseStatus, f)) ?? [];
 
 		if (this.view.config.files.layout !== ViewFilesLayout.List) {
-			const hierarchy = makeHierarchical(
+			const hierarchy = Arrays.makeHierarchical(
 				children,
 				n => n.uri.relativePath.split('/'),
-				(...parts: string[]) => normalizePath(joinPaths(...parts)),
+				(...parts: string[]) => Strings.normalizePath(paths.join(...parts)),
 				this.view.config.files.compact,
 			);
 
 			const root = new FolderNode(this.view, this, this.repoPath, '', hierarchy);
 			children = root.getChildren() as FileNode[];
 		} else {
-			children.sort((a, b) => sortCompare(a.label!, b.label!));
+			children.sort((a, b) =>
+				a.label!.localeCompare(b.label!, undefined, { numeric: true, sensitivity: 'base' }),
+			);
 		}
 
-		const commit = await this.view.container.git.getCommit(
+		const commit = await Container.git.getCommit(
 			this.rebaseStatus.repoPath,
 			this.rebaseStatus.steps.current.commit.ref,
 		);
@@ -82,12 +100,13 @@ export class RebaseStatusNode extends ViewNode<ViewsWithCommits> {
 		);
 		item.id = this.id;
 		item.contextValue = ContextValues.Rebase;
-		item.description = this.status?.hasConflicts ? pluralize('conflict', this.status.conflicts.length) : undefined;
+		item.description = this.status?.hasConflicts
+			? Strings.pluralize('conflict', this.status.conflicts.length)
+			: undefined;
 		item.iconPath = this.status?.hasConflicts
 			? new ThemeIcon('warning', new ThemeColor('list.warningForeground'))
 			: new ThemeIcon('debug-pause', new ThemeColor('list.foreground'));
-
-		const markdown = new MarkdownString(
+		item.tooltip = new MarkdownString(
 			`${`Rebasing ${
 				this.rebaseStatus.incoming != null ? GitReference.toString(this.rebaseStatus.incoming) : ''
 			}onto ${GitReference.toString(this.rebaseStatus.current)}`}\n\nStep ${
@@ -95,56 +114,82 @@ export class RebaseStatusNode extends ViewNode<ViewsWithCommits> {
 			} of ${this.rebaseStatus.steps.total}\\\nPaused at ${GitReference.toString(
 				this.rebaseStatus.steps.current.commit,
 				{ icon: true },
-			)}${this.status?.hasConflicts ? `\n\n${pluralize('conflicted file', this.status.conflicts.length)}` : ''}`,
+			)}${
+				this.status?.hasConflicts
+					? `\n\n${Strings.pluralize('conflicted file', this.status.conflicts.length)}`
+					: ''
+			}`,
 			true,
 		);
-		markdown.supportHtml = true;
-		markdown.isTrusted = true;
-
-		item.tooltip = markdown;
 
 		return item;
 	}
 
 	async openEditor() {
 		const rebaseTodoUri = Uri.joinPath(this.uri, '.git', 'rebase-merge', 'git-rebase-todo');
-		await executeCoreCommand(CoreCommands.OpenWith, rebaseTodoUri, 'gitlens.rebase', {
+		await commands.executeCommand(BuiltInCommands.OpenWith, rebaseTodoUri, 'gitlens.rebase', {
 			preview: false,
 		});
 	}
 }
 
 export class RebaseCommitNode extends ViewRefNode<ViewsWithCommits, GitRevisionReference> {
-	constructor(view: ViewsWithCommits, parent: ViewNode, public readonly commit: GitCommit) {
-		super(commit.getGitUri(), view, parent);
+	constructor(view: ViewsWithCommits, parent: ViewNode, public readonly commit: GitLogCommit) {
+		super(commit.toGitUri(), view, parent);
 	}
 
 	override toClipboard(): string {
-		return `${this.commit.shortSha}: ${this.commit.summary}`;
+		let message = this.commit.message;
+		const index = message.indexOf('\n');
+		if (index !== -1) {
+			message = `${message.substring(0, index)}${GlyphChars.Space}${GlyphChars.Ellipsis}`;
+		}
+
+		return `${this.commit.shortSha}: ${message}`;
 	}
 
 	get ref(): GitRevisionReference {
 		return this.commit;
 	}
 
-	async getChildren(): Promise<ViewNode[]> {
+	private get tooltip() {
+		return CommitFormatter.fromTemplate(
+			`\${author}\${ (email)} ${
+				GlyphChars.Dash
+			} \${id}\${ (tips)}\n\${ago} (\${date})\${\n\nmessage}${this.commit.getFormattedDiffStatus({
+				expand: true,
+				prefix: '\n\n',
+				separator: '\n',
+			})}\${\n\n${GlyphChars.Dash.repeat(2)}\nfootnotes}`,
+			this.commit,
+			{
+				dateFormat: Container.config.defaultDateFormat,
+				messageIndent: 4,
+			},
+		);
+	}
+
+	getChildren(): ViewNode[] {
 		const commit = this.commit;
 
-		const commits = await commit.getCommitsForFiles();
-		let children: FileNode[] = commits.map(c => new CommitFileNode(this.view, this, c.file!, c));
+		let children: FileNode[] = commit.files.map(
+			s => new CommitFileNode(this.view, this, s, commit.toFileCommit(s)!),
+		);
 
 		if (this.view.config.files.layout !== ViewFilesLayout.List) {
-			const hierarchy = makeHierarchical(
+			const hierarchy = Arrays.makeHierarchical(
 				children,
 				n => n.uri.relativePath.split('/'),
-				(...parts: string[]) => normalizePath(joinPaths(...parts)),
+				(...parts: string[]) => Strings.normalizePath(paths.join(...parts)),
 				this.view.config.files.compact,
 			);
 
 			const root = new FolderNode(this.view, this, this.repoPath, '', hierarchy);
 			children = root.getChildren() as FileNode[];
 		} else {
-			children.sort((a, b) => sortCompare(a.label!, b.label!));
+			children.sort((a, b) =>
+				a.label!.localeCompare(b.label!, undefined, { numeric: true, sensitivity: 'base' }),
+			);
 		}
 
 		return children;
@@ -159,6 +204,7 @@ export class RebaseCommitNode extends ViewRefNode<ViewsWithCommits, GitRevisionR
 			messageTruncateAtNewLine: true,
 		});
 		item.iconPath = new ThemeIcon('git-commit');
+		item.tooltip = this.tooltip;
 
 		return item;
 	}
@@ -178,54 +224,5 @@ export class RebaseCommitNode extends ViewRefNode<ViewsWithCommits, GitRevisionR
 			command: Commands.DiffWithPrevious,
 			arguments: [undefined, commandArgs],
 		};
-	}
-
-	override async resolveTreeItem(item: TreeItem): Promise<TreeItem> {
-		if (item.tooltip == null) {
-			item.tooltip = await this.getTooltip();
-		}
-		return item;
-	}
-
-	private async getTooltip() {
-		const remotes = await this.view.container.git.getRemotesWithProviders(this.commit.repoPath);
-		const remote = await this.view.container.git.getRichRemoteProvider(remotes);
-
-		if (this.commit.message == null) {
-			await this.commit.ensureFullDetails();
-		}
-
-		let autolinkedIssuesOrPullRequests;
-		let pr;
-
-		if (remote?.provider != null) {
-			[autolinkedIssuesOrPullRequests, pr] = await Promise.all([
-				this.view.container.autolinks.getIssueOrPullRequestLinks(
-					this.commit.message ?? this.commit.summary,
-					remote,
-				),
-				this.view.container.git.getPullRequestForCommit(this.commit.ref, remote.provider),
-			]);
-		}
-
-		const tooltip = await CommitFormatter.fromTemplateAsync(
-			`Rebase paused at \${link}\${' via 'pullRequest}\${'&nbsp;&nbsp;\u2022&nbsp;&nbsp;'changesDetail}\${'&nbsp;&nbsp;&nbsp;&nbsp;'tips}\n\n\${avatar} &nbsp;__\${author}__, \${ago} &nbsp; _(\${date})_ \n\n\${message}\${\n\n---\n\nfootnotes}`,
-			this.commit,
-			{
-				autolinkedIssuesOrPullRequests: autolinkedIssuesOrPullRequests,
-				dateFormat: this.view.container.config.defaultDateFormat,
-				markdown: true,
-				messageAutolinks: true,
-				messageIndent: 4,
-				pullRequestOrRemote: pr,
-				remotes: remotes,
-			},
-		);
-
-		const markdown = new MarkdownString(tooltip, true);
-		markdown.supportHtml = true;
-		markdown.isTrusted = true;
-
-		return markdown;
 	}
 }

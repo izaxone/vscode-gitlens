@@ -1,4 +1,21 @@
-import { resolveProp } from './resolver';
+'use strict';
+
+const emptyStr = '';
+
+function defaultResolver(...args: any[]): string {
+	if (args.length === 1) {
+		const arg0 = args[0];
+		if (arg0 == null) return emptyStr;
+		if (typeof arg0 === 'string') return arg0;
+		if (typeof arg0 === 'number' || typeof arg0 === 'boolean') {
+			return String(arg0);
+		}
+
+		return JSON.stringify(arg0);
+	}
+
+	return JSON.stringify(args);
+}
 
 export function memoize<T extends (...arg: any) => any>(resolver?: (...args: Parameters<T>) => string) {
 	return (target: any, key: string, descriptor: PropertyDescriptor & Record<string, any>) => {
@@ -21,7 +38,11 @@ export function memoize<T extends (...arg: any) => any>(resolver?: (...args: Par
 
 		let result;
 		descriptor[fnKey] = function (...args: any[]) {
-			const prop = resolveProp(memoizeKey, resolver, ...(args as Parameters<T>));
+			const prop =
+				fnKey === 'get' || args.length === 0
+					? memoizeKey
+					: `${memoizeKey}$${(resolver ?? defaultResolver)(...(args as Parameters<T>))}`;
+
 			if (Object.prototype.hasOwnProperty.call(this, prop)) {
 				result = this[prop];
 

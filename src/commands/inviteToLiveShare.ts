@@ -1,7 +1,6 @@
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command, CommandContext, isCommandContextViewNodeHasContributor } from './base';
+'use strict';
+import { Container } from '../container';
+import { command, Command, CommandContext, Commands, isCommandContextViewNodeHasContributor } from './common';
 
 export interface InviteToLiveShareCommandArgs {
 	email?: string;
@@ -17,7 +16,7 @@ export class InviteToLiveShareCommand extends Command {
 		return super.getMarkdownCommandArgsCore<InviteToLiveShareCommandArgs>(Commands.InviteToLiveShare, args);
 	}
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.InviteToLiveShare);
 	}
 
@@ -33,12 +32,12 @@ export class InviteToLiveShareCommand extends Command {
 
 	async execute(args?: InviteToLiveShareCommandArgs) {
 		if (args?.email) {
-			const contact = await this.container.vsls.getContact(args.email);
+			const contact = await Container.vsls.getContact(args.email);
 			if (contact != null) {
 				return contact.invite();
 			}
 		}
 
-		return this.container.vsls.startSession();
+		return Container.vsls.startSession();
 	}
 }

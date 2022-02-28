@@ -1,9 +1,10 @@
+'use strict';
 import { Command, MarkdownString, ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
-import type { DiffWithCommandArgs } from '../../commands';
-import { Commands, CoreCommands, GlyphChars } from '../../constants';
-import { CommitFormatter } from '../../git/formatters';
+import { Commands, DiffWithCommandArgs } from '../../commands';
+import { BuiltInCommands, GlyphChars } from '../../constants';
+import { Container } from '../../container';
+import { CommitFormatter, GitFile, GitMergeStatus, GitRebaseStatus, GitReference } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitFile, GitMergeStatus, GitRebaseStatus, GitReference } from '../../git/models';
 import { FileHistoryView } from '../fileHistoryView';
 import { LineHistoryView } from '../lineHistoryView';
 import { ViewsWithCommits } from '../viewBase';
@@ -24,7 +25,7 @@ export class MergeConflictIncomingChangesNode extends ViewNode<ViewsWithCommits 
 	}
 
 	async getTreeItem(): Promise<TreeItem> {
-		const commit = await this.view.container.git.getCommit(
+		const commit = await Container.git.getCommit(
 			this.status.repoPath,
 			this.status.type === 'rebase' ? this.status.steps.current.commit.ref : this.status.HEAD.ref,
 		);
@@ -37,21 +38,20 @@ export class MergeConflictIncomingChangesNode extends ViewNode<ViewsWithCommits 
 				: ` (${GitReference.toString(this.status.HEAD, { expand: false, icon: false })})`
 		}`;
 		item.iconPath = this.view.config.avatars
-			? (await commit?.getAvatarUri({ defaultStyle: this.view.container.config.defaultGravatarsStyle })) ??
+			? (await commit?.getAvatarUri({ defaultStyle: Container.config.defaultGravatarsStyle })) ??
 			  new ThemeIcon('diff')
 			: new ThemeIcon('diff');
-
-		const markdown = new MarkdownString(
-			`Incoming changes to $(file)${GlyphChars.Space}${this.file.path}${
+		item.tooltip = new MarkdownString(
+			`Incoming changes to $(file)${GlyphChars.Space}${this.file.fileName}${
 				this.status.incoming != null
 					? ` from ${GitReference.toString(this.status.incoming)}${
 							commit != null
 								? `\n\n${await CommitFormatter.fromTemplateAsync(
-										`\${avatar}&nbsp;__\${author}__, \${ago} &nbsp; _(\${date})_ \n\n\${message}\n\n\${link}\${' via 'pullRequest}`,
+										`$(git-commit)&nbsp;\${id} ${GlyphChars.Dash} \${avatar}&nbsp;__\${author}__, \${ago}\${' via 'pullRequest} &nbsp; _(\${date})_ \n\n\${message}`,
 										commit,
 										{
 											avatarSize: 16,
-											dateFormat: this.view.container.config.defaultDateFormat,
+											dateFormat: Container.config.defaultDateFormat,
 											markdown: true,
 											// messageAutolinks: true,
 											messageIndent: 4,
@@ -68,10 +68,6 @@ export class MergeConflictIncomingChangesNode extends ViewNode<ViewsWithCommits 
 			}`,
 			true,
 		);
-		markdown.supportHtml = true;
-		markdown.isTrusted = true;
-
-		item.tooltip = markdown;
 		item.command = this.getCommand();
 
 		return item;
@@ -81,10 +77,8 @@ export class MergeConflictIncomingChangesNode extends ViewNode<ViewsWithCommits 
 		if (this.status.mergeBase == null) {
 			return {
 				title: 'Open Revision',
-				command: CoreCommands.Open,
-				arguments: [
-					this.view.container.git.getRevisionUri(this.status.HEAD.ref, this.file.path, this.status.repoPath),
-				],
+				command: BuiltInCommands.Open,
+				arguments: [GitUri.toRevisionUri(this.status.HEAD.ref, this.file.fileName, this.status.repoPath)],
 			};
 		}
 
@@ -92,12 +86,12 @@ export class MergeConflictIncomingChangesNode extends ViewNode<ViewsWithCommits 
 			lhs: {
 				sha: this.status.mergeBase,
 				uri: GitUri.fromFile(this.file, this.status.repoPath, undefined, true),
-				title: `${this.file.path} (merge-base)`,
+				title: `${this.file.fileName} (merge-base)`,
 			},
 			rhs: {
 				sha: this.status.HEAD.ref,
 				uri: GitUri.fromFile(this.file, this.status.repoPath),
-				title: `${this.file.path} (${
+				title: `${this.file.fileName} (${
 					this.status.incoming != null
 						? GitReference.toString(this.status.incoming, { expand: false, icon: false })
 						: 'incoming'

@@ -1,10 +1,9 @@
+'use strict';
 import { env } from 'vscode';
 import { Container } from '../../container';
-import { GitBranch, GitLog, GitReference, GitRevision, Repository } from '../../git/models';
-import { Directive, DirectiveQuickPickItem } from '../../quickpicks/items/directive';
-import { FlagsQuickPickItem } from '../../quickpicks/items/flags';
-import { pluralize } from '../../system/string';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
+import { GitBranch, GitLog, GitReference, GitRevision, Repository } from '../../git/git';
+import { Directive, DirectiveQuickPickItem, FlagsQuickPickItem } from '../../quickpicks';
+import { Strings } from '../../system';
 import {
 	appendReposToTitle,
 	AsyncStepResultGenerator,
@@ -23,11 +22,9 @@ import {
 
 interface Context {
 	repos: Repository[];
-	associatedView: ViewsWithRepositoryFolders;
 	cache: Map<string, Promise<GitLog | undefined>>;
 	destination: GitBranch;
 	pickCommit: boolean;
-	pickCommitForItem: boolean;
 	selectedBranchOrTag: GitReference | undefined;
 	showTags: boolean;
 	title: string;
@@ -49,8 +46,8 @@ export interface RebaseGitCommandArgs {
 type RebaseStepState<T extends State = State> = ExcludeSome<StepState<T>, 'repo', string>;
 
 export class RebaseGitCommand extends QuickCommand<State> {
-	constructor(container: Container, args?: RebaseGitCommandArgs) {
-		super(container, 'rebase', 'rebase', 'Rebase', {
+	constructor(args?: RebaseGitCommandArgs) {
+		super('rebase', 'rebase', 'Rebase', {
 			description:
 				'integrates changes from a specified branch into the current branch, by changing the base of the branch and reapplying the commits on top',
 		});
@@ -78,7 +75,7 @@ export class RebaseGitCommand extends QuickCommand<State> {
 	async execute(state: RebaseStepState) {
 		let configs: string[] | undefined;
 		if (state.flags.includes('--interactive')) {
-			await this.container.rebaseEditor.enableForNextUse();
+			await Container.rebaseEditor.enableForNextUse();
 
 			let editor;
 			switch (env.appName) {
@@ -87,9 +84,6 @@ export class RebaseGitCommand extends QuickCommand<State> {
 					break;
 				case 'Visual Studio Code - Exploration':
 					editor = 'code-exploration --wait --reuse-window';
-					break;
-				case 'VSCodium':
-					editor = 'codium --wait --reuse-window';
 					break;
 				default:
 					editor = 'code --wait --reuse-window';
@@ -103,12 +97,10 @@ export class RebaseGitCommand extends QuickCommand<State> {
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
-			associatedView: this.container.commitsView,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			cache: new Map<string, Promise<GitLog | undefined>>(),
 			destination: undefined!,
 			pickCommit: false,
-			pickCommitForItem: false,
 			selectedBranchOrTag: undefined,
 			showTags: true,
 			title: this.title,
@@ -149,7 +141,6 @@ export class RebaseGitCommand extends QuickCommand<State> {
 			}
 
 			context.title = `${this.title} ${GitReference.toString(context.destination, { icon: false })}`;
-			context.pickCommitForItem = false;
 
 			if (state.counter < 2 || state.reference == null) {
 				const pickCommitToggle = new QuickCommandButtons.PickCommitToggle(context.pickCommit, context, () => {
@@ -183,13 +174,13 @@ export class RebaseGitCommand extends QuickCommand<State> {
 			if (
 				state.counter < 3 &&
 				context.selectedBranchOrTag != null &&
-				(context.pickCommit || context.pickCommitForItem || state.reference.ref === context.destination.ref)
+				(context.pickCommit || state.reference.ref === context.destination.ref)
 			) {
 				const ref = context.selectedBranchOrTag.ref;
 
 				let log = context.cache.get(ref);
 				if (log == null) {
-					log = this.container.git.getLog(state.repo.path, { ref: ref, merges: false });
+					log = Container.git.getLog(state.repo.path, { ref: ref, merges: false });
 					context.cache.set(ref, log);
 				}
 
@@ -225,7 +216,7 @@ export class RebaseGitCommand extends QuickCommand<State> {
 	}
 
 	private async *confirmStep(state: RebaseStepState, context: Context): AsyncStepResultGenerator<Flags[]> {
-		const aheadBehind = await this.container.git.getAheadBehindCommitCount(state.repo.path, [
+		const aheadBehind = await Container.git.getAheadBehindCommitCount(state.repo.path, [
 			state.reference.refType === 'revision'
 				? GitRevision.createRange(state.reference.ref, context.destination.ref)
 				: GitRevision.createRange(context.destination.name, state.reference.name),
@@ -253,7 +244,7 @@ export class RebaseGitCommand extends QuickCommand<State> {
 			[
 				FlagsQuickPickItem.create<Flags>(state.flags, [], {
 					label: this.title,
-					detail: `Will update ${GitReference.toString(context.destination)} by applying ${pluralize(
+					detail: `Will update ${GitReference.toString(context.destination)} by applying ${Strings.pluralize(
 						'commit',
 						count,
 					)} on top of ${GitReference.toString(state.reference)}`,
@@ -263,7 +254,9 @@ export class RebaseGitCommand extends QuickCommand<State> {
 					description: '--interactive',
 					detail: `Will interactively update ${GitReference.toString(
 						context.destination,
-					)} by applying ${pluralize('commit', count)} on top of ${GitReference.toString(state.reference)}`,
+					)} by applying ${Strings.pluralize('commit', count)} on top of ${GitReference.toString(
+						state.reference,
+					)}`,
 				}),
 			],
 		);

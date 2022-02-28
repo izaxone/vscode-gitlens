@@ -1,21 +1,52 @@
+'use strict';
 import { env, SourceControlResourceState, Uri, window } from 'vscode';
-import { ScmResource } from '../@types/vscode.git.resources';
-import { ScmResourceGroupType, ScmStatus } from '../@types/vscode.git.resources.enums';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
+import { GitRevision } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitRevision } from '../git/models';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { filterMap } from '../system/array';
-import { command } from '../system/command';
+import { Arrays } from '../system';
 import {
+	command,
 	Command,
 	CommandContext,
+	Commands,
+	getRepoPathOrPrompt,
 	isCommandContextViewNodeHasFileCommit,
 	isCommandContextViewNodeHasFileRefs,
-} from './base';
+} from './common';
+
+enum Status {
+	INDEX_MODIFIED,
+	INDEX_ADDED,
+	INDEX_DELETED,
+	INDEX_RENAMED,
+	INDEX_COPIED,
+
+	MODIFIED,
+	DELETED,
+	UNTRACKED,
+	IGNORED,
+
+	ADDED_BY_US,
+	ADDED_BY_THEM,
+	DELETED_BY_US,
+	DELETED_BY_THEM,
+	BOTH_ADDED,
+	BOTH_DELETED,
+	BOTH_MODIFIED,
+}
+
+enum ResourceGroupType {
+	Merge,
+	Index,
+	WorkingTree,
+}
+
+interface Resource extends SourceControlResourceState {
+	readonly resourceGroupType: ResourceGroupType;
+	readonly type: Status;
+}
 
 interface ExternalDiffFile {
 	uri: Uri;
@@ -30,7 +61,7 @@ export interface ExternalDiffCommandArgs {
 
 @command()
 export class ExternalDiffCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.ExternalDiff, Commands.ExternalDiffAll]);
 	}
 
@@ -38,8 +69,9 @@ export class ExternalDiffCommand extends Command {
 		args = { ...args };
 
 		if (isCommandContextViewNodeHasFileCommit(context)) {
-			const previousSha = await context.node.commit.getPreviousSha();
-			const ref1 = GitRevision.isUncommitted(previousSha) ? '' : previousSha;
+			const ref1 = GitRevision.isUncommitted(context.node.commit.previousFileSha)
+				? ''
+				: context.node.commit.previousFileSha;
 			const ref2 = context.node.commit.isUncommitted ? '' : context.node.commit.sha;
 
 			args.files = [
@@ -71,14 +103,14 @@ export class ExternalDiffCommand extends Command {
 			if (context.type === 'scm-states') {
 				args.files = context.scmResourceStates.map(r => ({
 					uri: r.resourceUri,
-					staged: (r as ScmResource).resourceGroupType === ScmResourceGroupType.Index,
+					staged: (r as Resource).resourceGroupType === ResourceGroupType.Index,
 				}));
 			} else if (context.type === 'scm-groups') {
-				args.files = filterMap(context.scmResourceGroups[0].resourceStates, r =>
+				args.files = Arrays.filterMap(context.scmResourceGroups[0].resourceStates, r =>
 					this.isModified(r)
 						? {
 								uri: r.resourceUri,
-								staged: (r as ScmResource).resourceGroupType === ScmResourceGroupType.Index,
+								staged: (r as Resource).resourceGroupType === ResourceGroupType.Index,
 						  }
 						: undefined,
 				);
@@ -87,10 +119,10 @@ export class ExternalDiffCommand extends Command {
 
 		if (context.command === Commands.ExternalDiffAll) {
 			if (args.files == null) {
-				const repository = await RepositoryPicker.getRepositoryOrShow('Open All Changes (difftool)');
-				if (repository == null) return undefined;
+				const repoPath = await getRepoPathOrPrompt('Open All Changes (difftool)');
+				if (!repoPath) return undefined;
 
-				const status = await this.container.git.getStatusForRepo(repository.uri);
+				const status = await Container.git.getStatusForRepo(repoPath);
 				if (status == null) {
 					return window.showInformationMessage("The repository doesn't have any changes");
 				}
@@ -113,10 +145,8 @@ export class ExternalDiffCommand extends Command {
 	}
 
 	private isModified(resource: SourceControlResourceState) {
-		const status = (resource as ScmResource).type;
-		return (
-			status === ScmStatus.BOTH_MODIFIED || status === ScmStatus.INDEX_MODIFIED || status === ScmStatus.MODIFIED
-		);
+		const status = (resource as Resource).type;
+		return status === Status.BOTH_MODIFIED || status === Status.INDEX_MODIFIED || status === Status.MODIFIED;
 	}
 
 	async execute(args?: ExternalDiffCommandArgs) {
@@ -128,11 +158,11 @@ export class ExternalDiffCommand extends Command {
 				const editor = window.activeTextEditor;
 				if (editor == null) return;
 
-				repoPath = this.container.git.getBestRepository(editor)?.path;
+				repoPath = await Container.git.getRepoPathOrActive(undefined, editor);
 				if (!repoPath) return;
 
 				const uri = editor.document.uri;
-				const status = await this.container.git.getStatusForFile(repoPath, uri);
+				const status = await Container.git.getStatusForFile(repoPath, uri.fsPath);
 				if (status == null) {
 					void window.showInformationMessage("The current file doesn't have any changes");
 
@@ -148,12 +178,11 @@ export class ExternalDiffCommand extends Command {
 					args.files.push({ uri: status.uri, staged: false });
 				}
 			} else {
-				repoPath = (await this.container.git.getOrOpenRepository(args.files[0].uri))?.path;
+				repoPath = await Container.git.getRepoPath(args.files[0].uri.fsPath);
 				if (!repoPath) return;
 			}
 
-			const tool =
-				this.container.config.advanced.externalDiffTool || (await this.container.git.getDiffTool(repoPath));
+			const tool = Container.config.advanced.externalDiffTool || (await Container.git.getDiffTool(repoPath));
 			if (!tool) {
 				const viewDocs = 'View Git Docs';
 				const result = await window.showWarningMessage(
@@ -170,7 +199,7 @@ export class ExternalDiffCommand extends Command {
 			}
 
 			for (const file of args.files) {
-				void this.container.git.openDiffTool(repoPath, file.uri, {
+				void Container.git.openDiffTool(repoPath, file.uri, {
 					ref1: file.ref1,
 					ref2: file.ref2,
 					staged: file.staged,

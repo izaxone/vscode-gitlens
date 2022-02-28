@@ -1,27 +1,25 @@
-import { configuration, OutputLevel } from '../configuration';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+'use strict';
+import { configuration, TraceLevel } from '../configuration';
+import { command, Command, Commands } from './common';
 
 @command()
 export class EnableDebugLoggingCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.EnableDebugLogging);
 	}
 
 	async execute() {
-		await configuration.updateEffective('outputLevel', OutputLevel.Debug);
+		await configuration.updateEffective('outputLevel', TraceLevel.Debug);
 	}
 }
 
 @command()
 export class DisableDebugLoggingCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.DisableDebugLogging);
 	}
 
 	async execute() {
-		await configuration.updateEffective('outputLevel', OutputLevel.Errors);
+		await configuration.updateEffective('outputLevel', TraceLevel.Errors);
 	}
 }

@@ -1,9 +1,8 @@
+'use strict';
 import { env, Uri } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
+import { Container } from '../container';
 import { PullRequestNode } from '../views/nodes';
-import { Command, CommandContext } from './base';
+import { Command, command, CommandContext, Commands } from './common';
 
 export interface OpenPullRequestOnRemoteCommandArgs {
 	clipboard?: boolean;
@@ -14,7 +13,7 @@ export interface OpenPullRequestOnRemoteCommandArgs {
 
 @command()
 export class OpenPullRequestOnRemoteCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.OpenPullRequestOnRemote, Commands.CopyRemotePullRequestUrl]);
 	}
 
@@ -34,10 +33,10 @@ export class OpenPullRequestOnRemoteCommand extends Command {
 		if (args?.pr == null) {
 			if (args?.repoPath == null || args?.ref == null) return;
 
-			const remote = await this.container.git.getRichRemoteProvider(args.repoPath);
+			const remote = await Container.git.getRichRemoteProvider(args.repoPath);
 			if (remote?.provider == null) return;
 
-			const pr = await this.container.git.getPullRequestForCommit(args.ref, remote.provider);
+			const pr = await Container.git.getPullRequestForCommit(args.ref, remote.provider);
 			if (pr == null) return;
 
 			args = { ...args };

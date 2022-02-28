@@ -1,11 +1,18 @@
-import { DateTimeFormat } from './system/date';
+'use strict';
+
+export enum TraceLevel {
+	Silent = 'silent',
+	Errors = 'errors',
+	Verbose = 'verbose',
+	Debug = 'debug',
+}
 
 export interface Config {
 	autolinks: AutolinkReference[] | null;
 	blame: {
 		avatars: boolean;
 		compact: boolean;
-		dateFormat: DateTimeFormat | string | null;
+		dateFormat: string | null;
 		format: string;
 		heatmap: {
 			enabled: boolean;
@@ -34,18 +41,12 @@ export interface Config {
 		scrollable: boolean;
 	};
 	debug: boolean;
-	defaultDateFormat: DateTimeFormat | string | null;
-	defaultDateShortFormat: DateTimeFormat | string | null;
+	defaultDateFormat: string | null;
+	defaultDateShortFormat: string | null;
 	defaultDateSource: DateSource;
 	defaultDateStyle: DateStyle;
 	defaultGravatarsStyle: GravatarDefaultStyle;
-	defaultTimeFormat: DateTimeFormat | string | null;
-	detectNestedRepositories: boolean;
-	experimental: {
-		virtualRepositories: {
-			enabled: boolean;
-		};
-	};
+	defaultTimeFormat: string | null;
 	fileAnnotations: {
 		command: string | null;
 	};
@@ -109,7 +110,7 @@ export interface Config {
 		};
 	};
 	modes: Record<string, ModeConfig> | null;
-	outputLevel: OutputLevel;
+	outputLevel: TraceLevel;
 	partners: Record<
 		string,
 		{
@@ -126,7 +127,7 @@ export interface Config {
 	statusBar: {
 		alignment: 'left' | 'right';
 		command: StatusBarCommand;
-		dateFormat: DateTimeFormat | string | null;
+		dateFormat: string | null;
 		enabled: boolean;
 		format: string;
 		reduceFlicker: boolean;
@@ -148,17 +149,10 @@ export interface Config {
 		enabled: boolean;
 	};
 	views: ViewsConfig;
-	visualHistory: {
-		queryLimit: number;
-	};
-	worktrees: {
-		defaultLocation: string | null;
-		promptForLocation: boolean;
-	};
 	advanced: AdvancedConfig;
 }
 
-export const enum AnnotationsToggleMode {
+export enum AnnotationsToggleMode {
 	File = 'file',
 	Window = 'window',
 }
@@ -171,25 +165,25 @@ export interface AutolinkReference {
 	ignoreCase?: boolean;
 }
 
-export const enum BlameHighlightLocations {
+export enum BlameHighlightLocations {
 	Gutter = 'gutter',
 	Line = 'line',
 	Overview = 'overview',
 }
 
-export const enum BranchSorting {
+export enum BranchSorting {
 	DateDesc = 'date:desc',
 	DateAsc = 'date:asc',
 	NameAsc = 'name:asc',
 	NameDesc = 'name:desc',
 }
 
-export const enum ChangesLocations {
+export enum ChangesLocations {
 	Gutter = 'gutter',
 	Overview = 'overview',
 }
 
-export const enum CodeLensCommand {
+export enum CodeLensCommand {
 	CopyRemoteCommitUrl = 'gitlens.copyRemoteCommitUrl',
 	CopyRemoteFileUrl = 'gitlens.copyRemoteFileUrl',
 	DiffWithPrevious = 'gitlens.diffWithPrevious',
@@ -207,13 +201,13 @@ export const enum CodeLensCommand {
 	ToggleFileHeatmap = 'gitlens.toggleFileHeatmap',
 }
 
-export const enum CodeLensScopes {
+export enum CodeLensScopes {
 	Document = 'document',
 	Containers = 'containers',
 	Blocks = 'blocks',
 }
 
-export const enum ContributorSorting {
+export enum ContributorSorting {
 	CountDesc = 'count:desc',
 	CountAsc = 'count:asc',
 	DateDesc = 'date:desc',
@@ -222,7 +216,7 @@ export const enum ContributorSorting {
 	NameDesc = 'name:desc',
 }
 
-export const enum CustomRemoteType {
+export enum CustomRemoteType {
 	AzureDevOps = 'AzureDevOps',
 	Bitbucket = 'Bitbucket',
 	BitbucketServer = 'BitbucketServer',
@@ -233,28 +227,28 @@ export const enum CustomRemoteType {
 	GitLab = 'GitLab',
 }
 
-export const enum DateSource {
+export enum DateSource {
 	Authored = 'authored',
 	Committed = 'committed',
 }
 
-export const enum DateStyle {
+export enum DateStyle {
 	Absolute = 'absolute',
 	Relative = 'relative',
 }
 
-export const enum FileAnnotationType {
+export enum FileAnnotationType {
 	Blame = 'blame',
 	Changes = 'changes',
 	Heatmap = 'heatmap',
 }
 
-export const enum GitCommandSorting {
+export enum GitCommandSorting {
 	Name = 'name',
 	Usage = 'usage',
 }
 
-export const enum GravatarDefaultStyle {
+export enum GravatarDefaultStyle {
 	Faces = 'wavatar',
 	Geometric = 'identicon',
 	Monster = 'monsterid',
@@ -263,25 +257,18 @@ export const enum GravatarDefaultStyle {
 	Robot = 'robohash',
 }
 
-export const enum HeatmapLocations {
+export enum HeatmapLocations {
 	Gutter = 'gutter',
 	Overview = 'overview',
 }
 
-export const enum KeyMap {
+export enum KeyMap {
 	Alternate = 'alternate',
 	Chorded = 'chorded',
 	None = 'none',
 }
 
-export const enum OutputLevel {
-	Silent = 'silent',
-	Errors = 'errors',
-	Verbose = 'verbose',
-	Debug = 'debug',
-}
-
-export const enum StatusBarCommand {
+export enum StatusBarCommand {
 	CopyRemoteCommitUrl = 'gitlens.copyRemoteCommitUrl',
 	CopyRemoteFileUrl = 'gitlens.copyRemoteFileUrl',
 	DiffWithPrevious = 'gitlens.diffWithPrevious',
@@ -301,25 +288,25 @@ export const enum StatusBarCommand {
 	ToggleFileHeatmap = 'gitlens.toggleFileHeatmap',
 }
 
-export const enum TagSorting {
+export enum TagSorting {
 	DateDesc = 'date:desc',
 	DateAsc = 'date:asc',
 	NameAsc = 'name:asc',
 	NameDesc = 'name:desc',
 }
 
-export const enum ViewBranchesLayout {
+export enum ViewBranchesLayout {
 	List = 'list',
 	Tree = 'tree',
 }
 
-export const enum ViewFilesLayout {
+export enum ViewFilesLayout {
 	Auto = 'auto',
 	List = 'list',
 	Tree = 'tree',
 }
 
-export const enum ViewShowBranchComparison {
+export enum ViewShowBranchComparison {
 	Branch = 'branch',
 	Working = 'working',
 }
@@ -335,7 +322,7 @@ export interface AdvancedConfig {
 	caching: {
 		enabled: boolean;
 	};
-	commitOrdering: 'date' | 'author-date' | 'topo' | null;
+	commitOrdering: string | null;
 	externalDiffTool: string | null;
 	externalDirectoryDiffTool: string | null;
 	fileHistoryFollowsRenames: boolean;
@@ -351,6 +338,7 @@ export interface AdvancedConfig {
 		suppressGitDisabledWarning: boolean;
 		suppressGitMissingWarning: boolean;
 		suppressGitVersionWarning: boolean;
+		suppressImproperWorkspaceCasingWarning: boolean;
 		suppressLineUncommittedWarning: boolean;
 		suppressNoRepositoryWarning: boolean;
 		suppressRebaseSwitchToTextWarning: boolean;
@@ -367,7 +355,6 @@ export interface CodeLensConfig {
 		enabled: boolean;
 		command: CodeLensCommand | false;
 	};
-	dateFormat: DateTimeFormat | string | null;
 	enabled: boolean;
 	includeSingleLineSymbols: boolean;
 	recentChange: {
@@ -525,7 +512,6 @@ interface ViewsConfigs {
 	searchAndCompare: SearchAndCompareViewConfig;
 	stashes: StashesViewConfig;
 	tags: TagsViewConfig;
-	worktrees: WorktreesViewConfig;
 }
 
 export type ViewsConfigKeys = keyof ViewsConfigs;
@@ -540,7 +526,6 @@ export const viewsConfigKeys: ViewsConfigKeys[] = [
 	'tags',
 	'contributors',
 	'searchAndCompare',
-	'worktrees',
 ];
 
 export type ViewsConfig = ViewsCommonConfig & ViewsConfigs;
@@ -580,7 +565,6 @@ export interface ContributorsViewConfig {
 		enabled: boolean;
 		showForCommits: boolean;
 	};
-	reveal: boolean;
 	showAllBranches: boolean;
 	showStatistics: boolean;
 }
@@ -633,7 +617,6 @@ export interface RepositoriesViewConfig {
 	showStashes: boolean;
 	showTags: boolean;
 	showUpstreamStatus: boolean;
-	showWorktrees: boolean;
 }
 
 export interface SearchAndCompareViewConfig {
@@ -657,18 +640,6 @@ export interface TagsViewConfig {
 	};
 	files: ViewsFilesConfig;
 	reveal: boolean;
-}
-
-export interface WorktreesViewConfig {
-	avatars: boolean;
-	files: ViewsFilesConfig;
-	pullRequests: {
-		enabled: boolean;
-		showForBranches: boolean;
-		showForCommits: boolean;
-	};
-	reveal: boolean;
-	showBranchComparison: false | ViewShowBranchComparison.Branch;
 }
 
 export interface ViewsFilesConfig {

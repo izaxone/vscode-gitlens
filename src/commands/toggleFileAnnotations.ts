@@ -1,19 +1,18 @@
+'use strict';
 import { TextEditor, TextEditorEdit, Uri, window } from 'vscode';
 import { AnnotationContext } from '../annotations/annotationProvider';
 import { ChangesAnnotationContext } from '../annotations/gutterChangesAnnotationProvider';
 import { UriComparer } from '../comparers';
 import { FileAnnotationType } from '../configuration';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { isTextEditor } from '../constants';
+import { Container } from '../container';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command } from '../system/command';
-import { isTextEditor } from '../system/utils';
-import { ActiveEditorCommand, EditorCommand } from './base';
+import { ActiveEditorCommand, command, Commands, EditorCommand } from './common';
 
 @command()
 export class ClearFileAnnotationsCommand extends EditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.ClearFileAnnotations, Commands.ComputingFileAnnotations]);
 	}
 
@@ -29,7 +28,7 @@ export class ClearFileAnnotationsCommand extends EditorCommand {
 		}
 
 		try {
-			void (await this.container.fileAnnotations.clear(editor));
+			void (await Container.fileAnnotations.clear(editor));
 		} catch (ex) {
 			Logger.error(ex, 'ClearFileAnnotationsCommand');
 			void Messages.showGenericErrorMessage('Unable to clear file annotations');
@@ -62,12 +61,12 @@ export type ToggleFileAnnotationCommandArgs =
 
 @command()
 export class ToggleFileBlameCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.ToggleFileBlame, Commands.ToggleFileBlameInDiffLeft, Commands.ToggleFileBlameInDiffRight]);
 	}
 
 	execute(editor: TextEditor, uri?: Uri, args?: ToggleFileBlameAnnotationCommandArgs): Promise<void> {
-		return toggleFileAnnotations<ToggleFileBlameAnnotationCommandArgs>(this.container, editor, uri, {
+		return toggleFileAnnotations<ToggleFileBlameAnnotationCommandArgs>(editor, uri, {
 			...args,
 			type: FileAnnotationType.Blame,
 		});
@@ -76,12 +75,12 @@ export class ToggleFileBlameCommand extends ActiveEditorCommand {
 
 @command()
 export class ToggleFileChangesCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.ToggleFileChanges);
 	}
 
 	execute(editor: TextEditor, uri?: Uri, args?: ToggleFileChangesAnnotationCommandArgs): Promise<void> {
-		return toggleFileAnnotations<ToggleFileChangesAnnotationCommandArgs>(this.container, editor, uri, {
+		return toggleFileAnnotations<ToggleFileChangesAnnotationCommandArgs>(editor, uri, {
 			...args,
 			type: FileAnnotationType.Changes,
 		});
@@ -90,7 +89,7 @@ export class ToggleFileChangesCommand extends ActiveEditorCommand {
 
 @command()
 export class ToggleFileHeatmapCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([
 			Commands.ToggleFileHeatmap,
 			Commands.ToggleFileHeatmapInDiffLeft,
@@ -99,7 +98,7 @@ export class ToggleFileHeatmapCommand extends ActiveEditorCommand {
 	}
 
 	execute(editor: TextEditor, uri?: Uri, args?: ToggleFileHeatmapAnnotationCommandArgs): Promise<void> {
-		return toggleFileAnnotations<ToggleFileHeatmapAnnotationCommandArgs>(this.container, editor, uri, {
+		return toggleFileAnnotations<ToggleFileHeatmapAnnotationCommandArgs>(editor, uri, {
 			...args,
 			type: FileAnnotationType.Heatmap,
 		});
@@ -107,7 +106,6 @@ export class ToggleFileHeatmapCommand extends ActiveEditorCommand {
 }
 
 async function toggleFileAnnotations<TArgs extends ToggleFileAnnotationCommandArgs>(
-	container: Container,
 	editor: TextEditor,
 	uri: Uri | undefined,
 	args: TArgs,
@@ -125,7 +123,7 @@ async function toggleFileAnnotations<TArgs extends ToggleFileAnnotationCommandAr
 	try {
 		args = { type: FileAnnotationType.Blame, ...(args as any) };
 
-		void (await container.fileAnnotations.toggle(
+		void (await Container.fileAnnotations.toggle(
 			editor,
 			args.type,
 			{

@@ -1,26 +1,25 @@
+'use strict';
+import * as paths from 'path';
 import { Command, ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
-import type { DiffWithCommandArgs } from '../../commands';
-import { DiffWithPreviousCommandArgs } from '../../commands/diffWithPrevious';
-import { Commands } from '../../constants';
-import { StatusFileFormatter } from '../../git/formatters/statusFormatter';
+import { Commands, DiffWithCommandArgs, DiffWithPreviousCommandArgs } from '../../commands';
+import { Container } from '../../container';
+import { GitFile, GitLogCommit, StatusFileFormatter } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitCommit, GitFile } from '../../git/models';
-import { joinPaths, relativeDir } from '../../system/path';
-import { pluralize } from '../../system/string';
+import { Strings } from '../../system';
 import { ViewsWithCommits } from '../viewBase';
 import { FileRevisionAsCommitNode } from './fileRevisionAsCommitNode';
 import { FileNode } from './folderNode';
 import { ContextValues, ViewNode } from './viewNode';
 
 export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNode {
-	public readonly commits: GitCommit[];
+	public readonly commits: GitLogCommit[];
 	public readonly file: GitFile;
 	public readonly repoPath: string;
 
 	private readonly _hasStagedChanges: boolean;
 	private readonly _hasUnstagedChanges: boolean;
 
-	constructor(view: ViewsWithCommits, parent: ViewNode, repoPath: string, file: GitFile, commits: GitCommit[]) {
+	constructor(view: ViewsWithCommits, parent: ViewNode, repoPath: string, file: GitFile, commits: GitLogCommit[]) {
 		let hasStagedChanges = false;
 		let hasUnstagedChanges = false;
 		let ref = undefined;
@@ -60,7 +59,7 @@ export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNo
 	}
 
 	get fileName(): string {
-		return this.file.path;
+		return this.file.fileName;
 	}
 
 	getChildren(): ViewNode[] {
@@ -88,7 +87,7 @@ export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNo
 			}
 
 			// Use the file icon and decorations
-			item.resourceUri = this.view.container.git.getAbsoluteUri(this.file.path, this.repoPath);
+			item.resourceUri = GitUri.resolveToUri(this.file.fileName, this.repoPath);
 			item.iconPath = ThemeIcon.File;
 
 			item.command = this.getCommand();
@@ -105,15 +104,15 @@ export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNo
 				}
 
 				// Use the file icon and decorations
-				item.resourceUri = this.view.container.git.getAbsoluteUri(this.file.path, this.repoPath);
+				item.resourceUri = GitUri.resolveToUri(this.file.fileName, this.repoPath);
 				item.iconPath = ThemeIcon.File;
 			} else {
 				item.contextValue = ContextValues.StatusFileCommits;
 
 				const icon = GitFile.getStatusIcon(this.file.status);
 				item.iconPath = {
-					dark: this.view.container.context.asAbsolutePath(joinPaths('images', 'dark', icon)),
-					light: this.view.container.context.asAbsolutePath(joinPaths('images', 'light', icon)),
+					dark: Container.context.asAbsolutePath(paths.join('images', 'dark', icon)),
+					light: Container.context.asAbsolutePath(paths.join('images', 'light', icon)),
 				};
 			}
 
@@ -152,7 +151,7 @@ export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNo
 	private _folderName: string | undefined;
 	get folderName() {
 		if (this._folderName == null) {
-			this._folderName = relativeDir(this.uri.relativePath);
+			this._folderName = paths.dirname(this.uri.relativePath);
 		}
 		return this._folderName;
 	}
@@ -215,7 +214,7 @@ export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNo
 		}
 
 		if (commits > 0) {
-			changedIn.push(pluralize('commit', commits));
+			changedIn.push(Strings.pluralize('commit', commits));
 		}
 
 		if (changedIn.length > 2) {
@@ -243,7 +242,7 @@ export class StatusFileNode extends ViewNode<ViewsWithCommits> implements FileNo
 		}
 
 		const commit = this.commits[this.commits.length - 1];
-		const file = commit.files?.find(f => f.path === this.file.path) ?? this.file;
+		const file = commit.findFile(this.file.fileName)!;
 		const commandArgs: DiffWithCommandArgs = {
 			lhs: {
 				sha: `${commit.sha}^`,

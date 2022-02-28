@@ -1,6 +1,7 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { GitUri } from '../../git/gitUri';
-import { HierarchicalItem } from '../../system/array';
+import { Arrays } from '../../system';
 import { View } from '../viewBase';
 import { BranchNode } from './branchNode';
 import { RepositoryNode } from './repositoryNode';
@@ -21,7 +22,7 @@ export class BranchOrTagFolderNode extends ViewNode {
 		public readonly repoPath: string,
 		public readonly folderName: string,
 		public readonly relativePath: string | undefined,
-		public readonly root: HierarchicalItem<BranchNode | TagNode>,
+		public readonly root: Arrays.HierarchicalItem<BranchNode | TagNode>,
 		private readonly _key?: string,
 		private readonly _expanded: boolean = false,
 	) {

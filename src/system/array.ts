@@ -1,5 +1,6 @@
-// eslint-disable-next-line no-restricted-imports
-export { findLastIndex, intersectionWith as intersection } from 'lodash-es';
+'use strict';
+
+export { findLastIndex, intersection } from 'lodash-es';
 
 export function chunk<T>(source: T[], size: number): T[][] {
 	const chunks = [];
@@ -207,15 +208,15 @@ export function compactHierarchy<T>(
 export function uniqueBy<TKey, TValue>(
 	source: TValue[],
 	uniqueKey: (item: TValue) => TKey,
-	onDuplicate: (original: TValue, current: TValue) => TValue | void,
-): TValue[] {
+	onDeduplicate: (original: TValue, current: TValue) => TValue | void,
+) {
 	const map = source.reduce((uniques, current) => {
 		const value = uniqueKey(current);
 		const original = uniques.get(value);
 		if (original === undefined) {
 			uniques.set(value, current);
 		} else {
-			const updated = onDuplicate(original, current);
+			const updated = onDeduplicate(original, current);
 			if (updated !== undefined) {
 				uniques.set(value, updated);
 			}

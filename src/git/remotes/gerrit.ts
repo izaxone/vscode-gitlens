@@ -1,7 +1,8 @@
+'use strict';
 import { Range, Uri } from 'vscode';
 import { DynamicAutolinkReference } from '../../annotations/autolinks';
 import { AutolinkReference } from '../../config';
-import { GitRevision } from '../models';
+import { GitRevision } from '../models/models';
 import { Repository } from '../models/repository';
 import { RemoteProvider } from './provider';
 
@@ -85,60 +86,42 @@ export class GerritRemote extends RemoteProvider {
 
 		// Check for a link with branch (and deal with branch names with /)
 		if (path.startsWith('/refs/heads/')) {
+			const branches = new Set<string>(
+				(
+					await repository.getBranches({
+						filter: b => b.remote,
+					})
+				).map(b => b.getNameWithoutRemote()),
+			);
 			const branchPath = path.substr('/refs/heads/'.length);
 
-			let branch;
-			const possibleBranches = new Map<string, string>();
-			index = branchPath.length;
 			do {
 				index = branchPath.lastIndexOf('/', index - 1);
-				branch = branchPath.substring(1, index);
+				const branch = branchPath.substring(0, index);
 
-				possibleBranches.set(branch, branchPath.substr(index));
-			} while (index > 0);
-
-			if (possibleBranches.size !== 0) {
-				const { values: branches } = await repository.getBranches({
-					filter: b => b.remote && possibleBranches.has(b.getNameWithoutRemote()),
-				});
-				for (const branch of branches) {
-					const path = possibleBranches.get(branch.getNameWithoutRemote());
-					if (path == null) continue;
-
-					const uri = repository.toAbsoluteUri(path, { validate: options?.validate });
+				if (branches.has(branch)) {
+					const uri = repository.toAbsoluteUri(branchPath.substr(index), { validate: options?.validate });
 					if (uri != null) return { uri: uri, startLine: startLine };
 				}
-			}
+			} while (index > 0);
 
 			return undefined;
 		}
 
 		// Check for a link with tag (and deal with tag names with /)
 		if (path.startsWith('/refs/tags/')) {
+			const tags = new Set<string>((await repository.getTags()).map(t => t.name));
 			const tagPath = path.substr('/refs/tags/'.length);
 
-			let tag;
-			const possibleTags = new Map<string, string>();
-			index = tagPath.length;
 			do {
 				index = tagPath.lastIndexOf('/', index - 1);
-				tag = tagPath.substring(1, index);
+				const tag = tagPath.substring(0, index);
 
-				possibleTags.set(tag, tagPath.substr(index));
-			} while (index > 0);
-
-			if (possibleTags.size !== 0) {
-				const { values: tags } = await repository.getTags({
-					filter: t => possibleTags.has(t.name),
-				});
-				for (const tag of tags) {
-					const path = possibleTags.get(tag.name);
-					if (path == null) continue;
-
-					const uri = repository.toAbsoluteUri(path, { validate: options?.validate });
+				if (tags.has(tag)) {
+					const uri = repository.toAbsoluteUri(tagPath.substr(index), { validate: options?.validate });
 					if (uri != null) return { uri: uri, startLine: startLine };
 				}
-			}
+			} while (index > 0);
 
 			return undefined;
 		}

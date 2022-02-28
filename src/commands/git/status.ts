@@ -1,10 +1,9 @@
+'use strict';
 import { GlyphChars } from '../../constants';
 import { Container } from '../../container';
-import { GitReference, GitStatus, Repository } from '../../git/models';
-import { CommandQuickPickItem } from '../../quickpicks/items/common';
-import { GitCommandQuickPickItem } from '../../quickpicks/items/gitCommands';
-import { pad } from '../../system/string';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
+import { GitReference, GitStatus, Repository } from '../../git/git';
+import { CommandQuickPickItem, GitCommandQuickPickItem } from '../../quickpicks';
+import { Strings } from '../../system';
 import {
 	PartialStepState,
 	pickRepositoryStep,
@@ -17,7 +16,6 @@ import {
 
 interface Context {
 	repos: Repository[];
-	associatedView: ViewsWithRepositoryFolders;
 	status: GitStatus;
 	title: string;
 }
@@ -34,8 +32,8 @@ export interface StatusGitCommandArgs {
 type StatusStepState<T extends State = State> = ExcludeSome<StepState<T>, 'repo', string>;
 
 export class StatusGitCommand extends QuickCommand<State> {
-	constructor(container: Container, args?: StatusGitCommandArgs) {
-		super(container, 'status', 'status', 'Status', {
+	constructor(args?: StatusGitCommandArgs) {
+		super('status', 'status', 'Status', {
 			description: 'shows status information about a repository',
 		});
 
@@ -57,8 +55,7 @@ export class StatusGitCommand extends QuickCommand<State> {
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
-			associatedView: this.container.commitsView,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			status: undefined!,
 			title: this.title,
 		};
@@ -89,7 +86,7 @@ export class StatusGitCommand extends QuickCommand<State> {
 			context.status = (await state.repo.getStatus())!;
 			if (context.status == null) return;
 
-			context.title = `${this.title}${pad(GlyphChars.Dot, 2, 2)}${GitReference.toString(
+			context.title = `${this.title}${Strings.pad(GlyphChars.Dot, 2, 2)}${GitReference.toString(
 				GitReference.create(context.status.branch, state.repo.path, {
 					refType: 'branch',
 					name: context.status.branch,

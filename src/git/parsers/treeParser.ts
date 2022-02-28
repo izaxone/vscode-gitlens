@@ -1,15 +1,16 @@
-import { debug } from '../../system/decorators/log';
-import { GitTreeEntry } from '../models';
+'use strict';
+import { debug } from '../../system';
+import { GitTree } from '../git';
 
 const emptyStr = '';
 const treeRegex = /(?:.+?)\s+(.+?)\s+(.+?)\s+(.+?)\s+(.+)/gm;
 
 export class GitTreeParser {
 	@debug({ args: false, singleLine: true })
-	static parse(data: string | undefined): GitTreeEntry[] | undefined {
+	static parse(data: string | undefined): GitTree[] | undefined {
 		if (!data) return undefined;
 
-		const trees: GitTreeEntry[] = [];
+		const trees: GitTree[] = [];
 
 		let type;
 		let sha;

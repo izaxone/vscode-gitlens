@@ -1,3 +1,4 @@
+'use strict';
 import {
 	CancellationToken,
 	Disposable,
@@ -10,7 +11,7 @@ import {
 	window,
 } from 'vscode';
 import { GlyphChars } from '../constants';
-import { GitBranchStatus } from '../git/models';
+import { GitBranchStatus } from '../git/git';
 
 export class ViewFileDecorationProvider implements FileDecorationProvider, Disposable {
 	private readonly _onDidChange = new EventEmitter<undefined | Uri | Uri[]>();

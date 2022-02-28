@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/strict-boolean-expressions */
-import { CharCode } from '../constants';
+'use strict';
 import { count, map, some } from './iterable';
-import { compareSubstring, compareSubstringIgnoreCase } from './string';
+import { CharCode, compareSubstring, compareSubstringIgnoreCase } from './string';
 
 const FIN = { done: true, value: undefined };
 

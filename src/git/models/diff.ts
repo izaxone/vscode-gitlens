@@ -1,3 +1,4 @@
+'use strict';
 import { GitDiffParser } from '../parsers/diffParser';
 
 export interface GitDiffLine {
@@ -48,9 +49,7 @@ export interface GitDiff {
 }
 
 export interface GitDiffShortStat {
-	readonly additions: number;
+	readonly files: number;
+	readonly insertions: number;
 	readonly deletions: number;
-	readonly changedFiles: number;
 }
-
-export type GitDiffFilter = 'A' | 'C' | 'D' | 'M' | 'R' | 'T' | 'U' | 'X' | 'B' | '*';

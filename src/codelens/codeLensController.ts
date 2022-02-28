@@ -1,10 +1,9 @@
+'use strict';
 import { ConfigurationChangeEvent, Disposable, languages } from 'vscode';
 import { configuration } from '../configuration';
-import { ContextKeys } from '../constants';
+import { ContextKeys, setContext } from '../constants';
 import { Container } from '../container';
-import { setContext } from '../context';
 import { Logger } from '../logger';
-import { once } from '../system/event';
 import {
 	DocumentBlameStateChangeEvent,
 	DocumentDirtyIdleTriggerEvent,
@@ -18,20 +17,14 @@ export class GitCodeLensController implements Disposable {
 	private _provider: GitCodeLensProvider | undefined;
 	private _providerDisposable: Disposable | undefined;
 
-	constructor(private readonly container: Container) {
-		this._disposable = Disposable.from(
-			once(container.onReady)(this.onReady, this),
-			configuration.onDidChange(this.onConfigurationChanged, this),
-		);
+	constructor() {
+		this._disposable = Disposable.from(configuration.onDidChange(this.onConfigurationChanged, this));
+		this.onConfigurationChanged();
 	}
 
 	dispose() {
 		this._providerDisposable?.dispose();
 		this._disposable?.dispose();
-	}
-
-	private onReady(): void {
-		this.onConfigurationChanged();
 	}
 
 	private onConfigurationChanged(e?: ConfigurationChangeEvent) {
@@ -45,7 +38,7 @@ export class GitCodeLensController implements Disposable {
 				Logger.log('CodeLens config changed; resetting CodeLens provider');
 			}
 
-			const cfg = this.container.config.codeLens;
+			const cfg = Container.config.codeLens;
 			if (cfg.enabled && (cfg.recentChange.enabled || cfg.authors.enabled)) {
 				this.ensureProvider();
 			} else {
@@ -59,7 +52,7 @@ export class GitCodeLensController implements Disposable {
 	}
 
 	private onBlameStateChanged(e: DocumentBlameStateChangeEvent<GitDocumentState>) {
-		// Only reset if we have saved, since the CodeLens won't naturally be re-rendered
+		// Only reset if we have saved, since the code lens won't naturally be re-rendered
 		if (this._provider === undefined || !e.blameable) return;
 
 		Logger.log('Blame state changed; resetting CodeLens provider');
@@ -69,7 +62,7 @@ export class GitCodeLensController implements Disposable {
 	private onDirtyIdleTriggered(e: DocumentDirtyIdleTriggerEvent<GitDocumentState>) {
 		if (this._provider === undefined || !e.document.isBlameable) return;
 
-		const maxLines = this.container.config.advanced.blame.sizeThresholdAfterEdit;
+		const maxLines = Container.config.advanced.blame.sizeThresholdAfterEdit;
 		if (maxLines > 0 && e.document.lineCount > maxLines) return;
 
 		Logger.log('Dirty idle triggered; resetting CodeLens provider');
@@ -99,11 +92,11 @@ export class GitCodeLensController implements Disposable {
 
 		this._providerDisposable?.dispose();
 
-		this._provider = new GitCodeLensProvider(this.container);
+		this._provider = new GitCodeLensProvider(Container.context, Container.git, Container.tracker);
 		this._providerDisposable = Disposable.from(
 			languages.registerCodeLensProvider(GitCodeLensProvider.selector, this._provider),
-			this.container.tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
-			this.container.tracker.onDidTriggerDirtyIdle(this.onDirtyIdleTriggered, this),
+			Container.tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
+			Container.tracker.onDidTriggerDirtyIdle(this.onDirtyIdleTriggered, this),
 		);
 	}
 }

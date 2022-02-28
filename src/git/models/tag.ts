@@ -1,9 +1,17 @@
+'use strict';
 import { configuration, DateStyle, TagSorting } from '../../configuration';
-import { Container } from '../../container';
-import { formatDate, fromNow } from '../../system/date';
-import { memoize } from '../../system/decorators/memoize';
-import { sortCompare } from '../../system/string';
-import { GitReference, GitTagReference } from './reference';
+import { Dates, memoize } from '../../system';
+import { GitReference, GitTagReference } from './models';
+
+export const TagDateFormatting = {
+	dateFormat: undefined! as string | null,
+	dateStyle: undefined! as DateStyle,
+
+	reset: () => {
+		TagDateFormatting.dateFormat = configuration.get('defaultDateFormat');
+		TagDateFormatting.dateStyle = configuration.get('defaultDateStyle');
+	},
+};
 
 export interface TagSortOptions {
 	current?: boolean;
@@ -26,9 +34,13 @@ export class GitTag implements GitTagReference {
 			case TagSorting.DateAsc:
 				return tags.sort((a, b) => a.date.getTime() - b.date.getTime());
 			case TagSorting.NameAsc:
-				return tags.sort((a, b) => sortCompare(a.name, b.name));
+				return tags.sort((a, b) =>
+					a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+				);
 			case TagSorting.NameDesc:
-				return tags.sort((a, b) => sortCompare(b.name, a.name));
+				return tags.sort((a, b) =>
+					b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' }),
+				);
 			case TagSorting.DateDesc:
 			default:
 				return tags.sort((a, b) => b.date.getTime() - a.date.getTime());
@@ -47,8 +59,8 @@ export class GitTag implements GitTagReference {
 	) {}
 
 	get formattedDate(): string {
-		return Container.instance.TagDateFormatting.dateStyle === DateStyle.Absolute
-			? this.formatDate(Container.instance.TagDateFormatting.dateFormat)
+		return TagDateFormatting.dateStyle === DateStyle.Absolute
+			? this.formatDate(TagDateFormatting.dateFormat)
 			: this.formatDateFromNow();
 	}
 
@@ -56,22 +68,46 @@ export class GitTag implements GitTagReference {
 		return this.name;
 	}
 
-	@memoize<GitTag['formatCommitDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
+	@memoize()
+	private get commitDateFormatter(): Dates.DateFormatter | undefined {
+		return this.commitDate == null ? undefined : Dates.getFormatter(this.commitDate);
+	}
+
+	@memoize()
+	private get dateFormatter(): Dates.DateFormatter {
+		return Dates.getFormatter(this.date);
+	}
+
+	@memoize<GitTag['formatCommitDate']>(format => (format == null ? 'MMMM Do, YYYY h:mma' : format))
 	formatCommitDate(format?: string | null) {
-		return this.commitDate != null ? formatDate(this.commitDate, format ?? 'MMMM Do, YYYY h:mma') : '';
+		const formatter = this.commitDateFormatter;
+		if (formatter == null) return '';
+
+		if (format == null) {
+			format = 'MMMM Do, YYYY h:mma';
+		}
+
+		return formatter.format(format);
 	}
 
 	formatCommitDateFromNow() {
-		return this.commitDate != null ? fromNow(this.commitDate) : '';
+		const formatter = this.commitDateFormatter;
+		if (formatter == null) return '';
+
+		return formatter.fromNow();
 	}
 
-	@memoize<GitTag['formatDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
+	@memoize<GitTag['formatDate']>(format => (format == null ? 'MMMM Do, YYYY h:mma' : format))
 	formatDate(format?: string | null) {
-		return formatDate(this.date, format ?? 'MMMM Do, YYYY h:mma');
+		if (format == null) {
+			format = 'MMMM Do, YYYY h:mma';
+		}
+
+		return this.dateFormatter.format(format);
 	}
 
 	formatDateFromNow() {
-		return fromNow(this.date);
+		return this.dateFormatter.fromNow();
 	}
 
 	@memoize()

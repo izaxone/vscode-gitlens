@@ -1,54 +1,18 @@
-import { Disposable, TextEditor, Uri, window } from 'vscode';
+'use strict';
+import { Disposable, window } from 'vscode';
 import { Container } from '../container';
-import { Repository } from '../git/models';
-import { map } from '../system/iterable';
-import { getQuickPickIgnoreFocusOut } from '../system/utils';
-import { CommandQuickPickItem } from './items/common';
-import { RepositoryQuickPickItem } from './items/gitCommands';
+import { Repository } from '../git/git';
+import { getQuickPickIgnoreFocusOut, RepositoryQuickPickItem } from '../quickpicks';
+import { Iterables } from '../system';
 
 export namespace RepositoryPicker {
-	export async function getBestRepositoryOrShow(
-		uri: Uri | undefined,
-		editor: TextEditor | undefined,
-		title: string,
-	): Promise<Repository | undefined> {
-		const repository = Container.instance.git.getBestRepository(uri, editor);
-		if (repository != null) return repository;
-
-		const pick = await RepositoryPicker.show(title);
-		if (pick instanceof CommandQuickPickItem) {
-			await pick.execute();
-			return undefined;
-		}
-
-		return pick?.item;
-	}
-
-	export async function getRepositoryOrShow(title: string, uri?: Uri): Promise<Repository | undefined> {
-		let repository;
-		if (uri == null) {
-			repository = Container.instance.git.highlander;
-		} else {
-			repository = await Container.instance.git.getOrOpenRepository(uri);
-		}
-		if (repository != null) return repository;
-
-		const pick = await RepositoryPicker.show(title);
-		if (pick instanceof CommandQuickPickItem) {
-			void (await pick.execute());
-			return undefined;
-		}
-
-		return pick?.item;
-	}
-
 	export async function show(
 		title: string | undefined,
 		placeholder: string = 'Choose a repository',
 		repositories?: Repository[],
 	): Promise<RepositoryQuickPickItem | undefined> {
 		const items: RepositoryQuickPickItem[] = await Promise.all([
-			...map(repositories ?? Container.instance.git.openRepositories, r =>
+			...Iterables.map(repositories ?? (await Container.git.getOrderedRepositories()), r =>
 				RepositoryQuickPickItem.create(r, undefined, { branch: true, status: true }),
 			),
 		]);

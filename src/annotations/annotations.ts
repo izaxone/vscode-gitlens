@@ -1,3 +1,4 @@
+'use strict';
 import {
 	DecorationInstanceRenderOptions,
 	DecorationOptions,
@@ -14,9 +15,8 @@ import { HeatmapLocations } from '../config';
 import { Config, configuration } from '../configuration';
 import { Colors, GlyphChars } from '../constants';
 import { Container } from '../container';
-import { CommitFormatOptions, CommitFormatter } from '../git/formatters';
-import { GitCommit } from '../git/models';
-import { getWidth, interpolate, pad } from '../system/string';
+import { CommitFormatOptions, CommitFormatter, GitCommit } from '../git/git';
+import { Strings } from '../system';
 import { toRgba } from '../webviews/apps/shared/colors';
 
 export interface ComputedHeatmap {
@@ -63,14 +63,14 @@ export async function getHeatmapColors() {
 	if (heatmapColors == null) {
 		let colors;
 		if (
-			Container.instance.config.heatmap.coldColor === defaultHeatmapColdColor &&
-			Container.instance.config.heatmap.hotColor === defaultHeatmapHotColor
+			Container.config.heatmap.coldColor === defaultHeatmapColdColor &&
+			Container.config.heatmap.hotColor === defaultHeatmapHotColor
 		) {
 			colors = defaultHeatmapColors;
 		} else {
 			const chroma = (await import(/* webpackChunkName: "heatmap-chroma" */ 'chroma-js')).default;
 			colors = chroma
-				.scale([Container.instance.config.heatmap.hotColor, Container.instance.config.heatmap.coldColor])
+				.scale([Container.config.heatmap.hotColor, Container.config.heatmap.coldColor])
 				.mode('lrgb')
 				.classes(20)
 				.colors(20);
@@ -110,7 +110,7 @@ export class Annotations {
 	) {
 		const [r, g, b, a] = this.getHeatmapColor(date, heatmap);
 
-		const { locations } = Container.instance.config.heatmap;
+		const { locations } = Container.config.heatmap;
 		const gutter = locations.includes(HeatmapLocations.Gutter);
 		const overview = locations.includes(HeatmapLocations.Overview);
 
@@ -157,7 +157,7 @@ export class Annotations {
 		}
 
 		const message = CommitFormatter.fromTemplate(format, commit, dateFormatOrFormatOptions);
-		decoration.renderOptions!.before!.contentText = pad(message.replace(/ /g, GlyphChars.Space), 1, 1);
+		decoration.renderOptions!.before!.contentText = Strings.pad(message.replace(/ /g, GlyphChars.Space), 1, 1);
 
 		return decoration;
 	}
@@ -185,7 +185,7 @@ export class Annotations {
 
 		if (chars >= 0) {
 			// Add the chars of the template string (without tokens)
-			chars += getWidth(interpolate(format, undefined));
+			chars += Strings.getWidth(Strings.interpolate(format, undefined));
 			// If we have chars, add a bit of padding
 			if (chars > 0) {
 				chars += 3;
@@ -251,7 +251,7 @@ export class Annotations {
 				after: {
 					backgroundColor: new ThemeColor(Colors.TrailingLineBackgroundColor),
 					color: new ThemeColor(Colors.TrailingLineForegroundColor),
-					contentText: pad(message.replace(/ /g, GlyphChars.Space), 1, 1),
+					contentText: Strings.pad(message.replace(/ /g, GlyphChars.Space), 1, 1),
 					fontWeight: 'normal',
 					fontStyle: 'normal',
 					// Pull the decoration out of the document flow if we want to be scrollable

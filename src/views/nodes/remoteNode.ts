@@ -1,10 +1,11 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState, Uri } from 'vscode';
 import { ViewBranchesLayout } from '../../configuration';
 import { GlyphChars } from '../../constants';
+import { Container } from '../../container';
+import { GitRemote, GitRemoteType, Repository } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitRemote, GitRemoteType, Repository } from '../../git/models';
-import { makeHierarchical } from '../../system/array';
-import { log } from '../../system/decorators/log';
+import { Arrays, log } from '../../system';
 import { RemotesView } from '../remotesView';
 import { RepositoriesView } from '../repositoriesView';
 import { BranchNode } from './branchNode';
@@ -43,10 +44,9 @@ export class RemoteNode extends ViewNode<RemotesView | RepositoriesView> {
 			filter: b => b.remote && b.name.startsWith(this.remote.name),
 			sort: true,
 		});
-		if (branches.values.length === 0) return [new MessageNode(this.view, this, 'No branches could be found.')];
+		if (branches.length === 0) return [new MessageNode(this.view, this, 'No branches could be found.')];
 
-		// TODO@eamodio handle paging
-		const branchNodes = branches.values.map(
+		const branchNodes = branches.map(
 			b =>
 				new BranchNode(GitUri.fromRepoPath(this.uri.repoPath!, b.ref), this.view, this, b, false, {
 					showComparison: false,
@@ -55,7 +55,7 @@ export class RemoteNode extends ViewNode<RemotesView | RepositoriesView> {
 		);
 		if (this.view.config.branches.layout === ViewBranchesLayout.List) return branchNodes;
 
-		const hierarchy = makeHierarchical(
+		const hierarchy = Arrays.makeHierarchical(
 			branchNodes,
 			n => n.treeHierarchy,
 			(...paths) => paths.join('/'),
@@ -117,11 +117,11 @@ export class RemoteNode extends ViewNode<RemotesView | RepositoriesView> {
 				provider.icon === 'remote'
 					? new ThemeIcon('cloud')
 					: {
-							dark: this.view.container.context.asAbsolutePath(`images/dark/icon-${provider.icon}.svg`),
-							light: this.view.container.context.asAbsolutePath(`images/light/icon-${provider.icon}.svg`),
+							dark: Container.context.asAbsolutePath(`images/dark/icon-${provider.icon}.svg`),
+							light: Container.context.asAbsolutePath(`images/light/icon-${provider.icon}.svg`),
 					  };
 
-			if (provider.hasRichApi()) {
+			if (provider.hasApi()) {
 				const connected = provider.maybeConnected ?? (await provider.isConnected());
 
 				item.contextValue = `${ContextValues.Remote}${connected ? '+connected' : '+disconnected'}`;

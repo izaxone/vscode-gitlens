@@ -1,4 +1,5 @@
-// eslint-disable-next-line no-restricted-imports
+'use strict';
+
 export { isEqual as areEqual } from 'lodash-es';
 
 export function flatten(o: any, prefix: string = '', stringify: boolean = false): Record<string, any> {

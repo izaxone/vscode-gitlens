@@ -1,6 +1,8 @@
-import { Disposable, TreeItem, TreeItemCollapsibleState, Uri, window } from 'vscode';
+'use strict';
+import * as paths from 'path';
+import { Disposable, TreeItem, TreeItemCollapsibleState, window } from 'vscode';
 import { configuration } from '../../configuration';
-import type { GitUri } from '../../git/gitUri';
+import { Container } from '../../container';
 import {
 	GitBranch,
 	GitLog,
@@ -9,13 +11,11 @@ import {
 	RepositoryChangeComparisonMode,
 	RepositoryChangeEvent,
 	RepositoryFileSystemChangeEvent,
-} from '../../git/models';
+	toFolderGlob,
+} from '../../git/git';
+import { GitUri } from '../../git/gitUri';
 import { Logger } from '../../logger';
-import { gate } from '../../system/decorators/gate';
-import { debug } from '../../system/decorators/log';
-import { memoize } from '../../system/decorators/memoize';
-import { filterMap, flatMap, map, uniqueBy } from '../../system/iterable';
-import { basename } from '../../system/path';
+import { Arrays, debug, gate, Iterables, memoize } from '../../system';
 import { FileHistoryView } from '../fileHistoryView';
 import { CommitNode } from './commitNode';
 import { LoadMoreNode, MessageNode } from './common';
@@ -58,18 +58,18 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 
 		const children: ViewNode[] = [];
 
-		const range = this.branch != null ? await this.view.container.git.getBranchAheadRange(this.branch) : undefined;
+		const range = this.branch != null ? await Container.git.getBranchAheadRange(this.branch) : undefined;
 		const [log, fileStatuses, currentUser, getBranchAndTagTips, unpublishedCommits] = await Promise.all([
 			this.getLog(),
 			this.uri.sha == null
-				? this.view.container.git.getStatusForFiles(this.uri.repoPath!, this.getPathOrGlob())
+				? Container.git.getStatusForFiles(this.uri.repoPath!, this.getPathOrGlob())
 				: undefined,
-			this.uri.sha == null ? this.view.container.git.getCurrentUser(this.uri.repoPath!) : undefined,
+			this.uri.sha == null ? Container.git.getCurrentUser(this.uri.repoPath!) : undefined,
 			this.branch != null
-				? this.view.container.git.getBranchesAndTagsTipsFn(this.uri.repoPath, this.branch.name)
+				? Container.git.getBranchesAndTagsTipsFn(this.uri.repoPath, this.branch.name)
 				: undefined,
 			range
-				? this.view.container.git.getLogRefsOnly(this.uri.repoPath!, {
+				? Container.git.getLogRefsOnly(this.uri.repoPath!, {
 						limit: 0,
 						ref: range,
 				  })
@@ -78,19 +78,17 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 
 		if (fileStatuses?.length) {
 			if (this.folder) {
-				// Combine all the working/staged changes into single pseudo commits
-				const commits = map(
-					uniqueBy(
-						flatMap(fileStatuses, f => f.getPseudoCommits(this.view.container, currentUser)),
-						c => c.sha,
-						(original, c) => original.with({ files: { files: [...original.files!, ...c.files!] } }),
-					),
-					commit => new CommitNode(this.view, this, commit),
+				const commits = Arrays.uniqueBy(
+					[...Iterables.flatMap(fileStatuses, f => f.toPsuedoCommits(currentUser))],
+					c => c.sha,
+					(original, c) => void original.files.push(...c.files),
 				);
-				children.push(...commits);
+				if (commits.length) {
+					children.push(...commits.map(commit => new CommitNode(this.view, this, commit)));
+				}
 			} else {
 				const [file] = fileStatuses;
-				const commits = file.getPseudoCommits(this.view.container, currentUser);
+				const commits = file.toPsuedoCommits(currentUser);
 				if (commits.length) {
 					children.push(
 						...commits.map(commit => new FileRevisionAsCommitNode(this.view, this, file, commit)),
@@ -102,10 +100,10 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 		if (log != null) {
 			children.push(
 				...insertDateMarkers(
-					filterMap(log.commits.values(), c =>
+					Iterables.map(log.commits.values(), c =>
 						this.folder
 							? new CommitNode(
-									this.view,
+									this.view as any,
 									this,
 									c,
 									unpublishedCommits?.has(c.ref),
@@ -115,13 +113,11 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 										expand: false,
 									},
 							  )
-							: c.file != null
-							? new FileRevisionAsCommitNode(this.view, this, c.file, c, {
+							: new FileRevisionAsCommitNode(this.view, this, c.files[0], c, {
 									branch: this.branch,
 									getBranchAndTagTips: getBranchAndTagTips,
 									unpublished: unpublishedCommits?.has(c.ref),
-							  })
-							: undefined,
+							  }),
 					),
 					this,
 				),
@@ -157,7 +153,7 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 	get label() {
 		// Check if this is a base folder
 		if (this.folder && this.uri.fileName === '') {
-			return `${basename(this.uri.path)}${
+			return `${paths.basename(this.uri.fsPath)}${
 				this.uri.sha
 					? ` ${this.uri.sha === GitRevision.deletedOrMissing ? this.uri.shortSha : `(${this.uri.shortSha})`}`
 					: ''
@@ -172,8 +168,8 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 	}
 
 	@debug()
-	protected subscribe() {
-		const repo = this.view.container.git.getRepository(this.uri);
+	protected async subscribe() {
+		const repo = await Container.git.getRepository(this.uri);
 		if (repo == null) return undefined;
 
 		const subscription = Disposable.from(
@@ -190,8 +186,8 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 		return subscription;
 	}
 
-	protected override etag(): number {
-		return Date.now();
+	protected override get requiresResetOnVisible(): boolean {
+		return true;
 	}
 
 	private onRepositoryChanged(e: RepositoryChangeEvent) {
@@ -237,7 +233,7 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 	private _log: GitLog | undefined;
 	private async getLog() {
 		if (this._log == null) {
-			this._log = await this.view.container.git.getLogForFile(this.uri.repoPath, this.getPathOrGlob(), {
+			this._log = await Container.git.getLogForFile(this.uri.repoPath, this.getPathOrGlob(), {
 				limit: this.limit ?? this.view.config.pageItemLimit,
 				ref: this.uri.sha,
 			});
@@ -248,7 +244,7 @@ export class FileHistoryNode extends SubscribeableViewNode<FileHistoryView> impl
 
 	@memoize()
 	private getPathOrGlob() {
-		return this.folder ? Uri.joinPath(this.uri, '*') : this.uri;
+		return this.folder ? toFolderGlob(this.uri.fsPath) : this.uri.fsPath;
 	}
 
 	get hasMore() {

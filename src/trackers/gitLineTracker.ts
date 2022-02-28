@@ -1,9 +1,10 @@
+'use strict';
 import { Disposable, TextEditor } from 'vscode';
 import { GlyphChars } from '../constants';
 import { Container } from '../container';
-import { GitCommit } from '../git/models';
+import { GitBlameCommit, GitLogCommit } from '../git/git';
 import { Logger } from '../logger';
-import { debug } from '../system/decorators/log';
+import { debug } from '../system';
 import {
 	DocumentBlameStateChangeEvent,
 	DocumentContentChangeEvent,
@@ -16,18 +17,10 @@ import { LinesChangeEvent, LineSelection, LineTracker } from './lineTracker';
 export * from './lineTracker';
 
 export class GitLineState {
-	constructor(public readonly commit: GitCommit | undefined) {
-		if (commit != null && commit.file == null) {
-			debugger;
-		}
-	}
+	constructor(public readonly commit: GitBlameCommit | undefined, public logCommit?: GitLogCommit) {}
 }
 
 export class GitLineTracker extends LineTracker<GitLineState> {
-	constructor(private readonly container: Container) {
-		super();
-	}
-
 	protected override async fireLinesChanged(e: LinesChangeEvent) {
 		this.reset();
 
@@ -46,15 +39,15 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 
 		return Disposable.from(
 			{ dispose: () => this.onSuspend() },
-			this.container.tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
-			this.container.tracker.onDidChangeDirtyState(this.onDirtyStateChanged, this),
-			this.container.tracker.onDidTriggerDirtyIdle(this.onDirtyIdleTriggered, this),
+			Container.tracker.onDidChangeBlameState(this.onBlameStateChanged, this),
+			Container.tracker.onDidChangeDirtyState(this.onDirtyStateChanged, this),
+			Container.tracker.onDidTriggerDirtyIdle(this.onDirtyIdleTriggered, this),
 		);
 	}
 
 	protected override onResume(): void {
 		if (this._subscriptionOnlyWhenActive == null) {
-			this._subscriptionOnlyWhenActive = this.container.tracker.onDidChangeContent(this.onContentChanged, this);
+			this._subscriptionOnlyWhenActive = Container.tracker.onDidChangeContent(this.onContentChanged, this);
 		}
 	}
 
@@ -63,9 +56,9 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 		this._subscriptionOnlyWhenActive = undefined;
 	}
 
-	@debug<GitLineTracker['onBlameStateChanged']>({
+	@debug({
 		args: {
-			0: e =>
+			0: (e: DocumentBlameStateChangeEvent<GitDocumentState>) =>
 				`editor=${e.editor.document.uri.toString(true)}, doc=${e.document.uri.toString(true)}, blameable=${
 					e.blameable
 				}`,
@@ -75,9 +68,10 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 		this.trigger('editor');
 	}
 
-	@debug<GitLineTracker['onContentChanged']>({
+	@debug({
 		args: {
-			0: e => `editor=${e.editor.document.uri.toString(true)}, doc=${e.document.uri.toString(true)}`,
+			0: (e: DocumentContentChangeEvent<GitDocumentState>) =>
+				`editor=${e.editor.document.uri.toString(true)}, doc=${e.document.uri.toString(true)}`,
 		},
 	})
 	private onContentChanged(e: DocumentContentChangeEvent<GitDocumentState>) {
@@ -94,21 +88,22 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 		}
 	}
 
-	@debug<GitLineTracker['onDirtyIdleTriggered']>({
+	@debug({
 		args: {
-			0: e => `editor=${e.editor.document.uri.toString(true)}, doc=${e.document.uri.toString(true)}`,
+			0: (e: DocumentDirtyIdleTriggerEvent<GitDocumentState>) =>
+				`editor=${e.editor.document.uri.toString(true)}, doc=${e.document.uri.toString(true)}`,
 		},
 	})
 	private onDirtyIdleTriggered(e: DocumentDirtyIdleTriggerEvent<GitDocumentState>) {
-		const maxLines = this.container.config.advanced.blame.sizeThresholdAfterEdit;
+		const maxLines = Container.config.advanced.blame.sizeThresholdAfterEdit;
 		if (maxLines > 0 && e.document.lineCount > maxLines) return;
 
 		this.resume();
 	}
 
-	@debug<GitLineTracker['onDirtyStateChanged']>({
+	@debug({
 		args: {
-			0: e =>
+			0: (e: DocumentDirtyStateChangeEvent<GitDocumentState>) =>
 				`editor=${e.editor.document.uri.toString(true)}, doc=${e.document.uri.toString(true)}, dirty=${
 					e.dirty
 				}`,
@@ -122,8 +117,11 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 		}
 	}
 
-	@debug<GitLineTracker['updateState']>({
-		args: { 0: selections => selections?.map(s => s.active).join(','), 1: e => e.document.uri.toString(true) },
+	@debug({
+		args: {
+			0: (selections: LineSelection[]) => selections?.map(s => s.active).join(','),
+			1: (editor: TextEditor) => editor.document.uri.toString(true),
+		},
 		exit: updated => `returned ${updated}`,
 		singleLine: true,
 	})
@@ -138,7 +136,7 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 			return false;
 		}
 
-		const trackedDocument = await this.container.tracker.getOrAdd(editor.document);
+		const trackedDocument = await Container.tracker.getOrAdd(editor.document);
 		if (!trackedDocument.isBlameable) {
 			if (cc != null) {
 				cc.exitDetails = ` ${GlyphChars.Dot} document is not blameable`;
@@ -148,12 +146,14 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 		}
 
 		if (selections.length === 1) {
-			const blameLine = await this.container.git.getBlameForLine(
-				trackedDocument.uri,
-				selections[0].active,
-				editor?.document,
-			);
-			if (blameLine == null) {
+			const blameLine = editor.document.isDirty
+				? await Container.git.getBlameForLineContents(
+						trackedDocument.uri,
+						selections[0].active,
+						editor.document.getText(),
+				  )
+				: await Container.git.getBlameForLine(trackedDocument.uri, selections[0].active);
+			if (blameLine === undefined) {
 				if (cc != null) {
 					cc.exitDetails = ` ${GlyphChars.Dot} blame failed`;
 				}
@@ -163,8 +163,10 @@ export class GitLineTracker extends LineTracker<GitLineState> {
 
 			this.setState(blameLine.line.line - 1, new GitLineState(blameLine.commit));
 		} else {
-			const blame = await this.container.git.getBlame(trackedDocument.uri, editor.document);
-			if (blame == null) {
+			const blame = editor.document.isDirty
+				? await Container.git.getBlameForFileContents(trackedDocument.uri, editor.document.getText())
+				: await Container.git.getBlameForFile(trackedDocument.uri);
+			if (blame === undefined) {
 				if (cc != null) {
 					cc.exitDetails = ` ${GlyphChars.Dot} blame failed`;
 				}

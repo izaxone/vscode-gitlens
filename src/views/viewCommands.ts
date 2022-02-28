@@ -1,27 +1,24 @@
+'use strict';
 import { commands, env, TextDocumentShowOptions, Uri, window } from 'vscode';
 import type { CreatePullRequestActionContext, OpenPullRequestActionContext } from '../api/gitlens';
-import type {
+import {
+	Commands,
 	DiffWithCommandArgs,
 	DiffWithPreviousCommandArgs,
 	DiffWithWorkingCommandArgs,
-	OpenFileAtRevisionCommandArgs,
-} from '../commands';
-import { GitActions } from '../commands/gitCommands.actions';
-import { configuration, FileAnnotationType, ViewShowBranchComparison } from '../configuration';
-import { Commands, ContextKeys, CoreCommands, CoreGitCommands } from '../constants';
-import { Container } from '../container';
-import { setContext } from '../context';
-import { GitUri } from '../git/gitUri';
-import { GitReference, GitRevision } from '../git/models';
-import {
 	executeActionCommand,
 	executeCommand,
-	executeCoreCommand,
-	executeCoreGitCommand,
 	executeEditorCommand,
-} from '../system/command';
-import { debug } from '../system/decorators/log';
-import { OpenWorkspaceLocation } from '../system/utils';
+	GitActions,
+	OpenFileAtRevisionCommandArgs,
+} from '../commands';
+import { configuration, FileAnnotationType, ViewShowBranchComparison } from '../configuration';
+import { BuiltInCommands, BuiltInGitCommands, ContextKeys, setContext } from '../constants';
+import { Container } from '../container';
+import { GitReference, GitRevision } from '../git/git';
+import { GitService } from '../git/gitService';
+import { GitUri } from '../git/gitUri';
+import { debug } from '../system';
 import { runGitCommandInTerminal } from '../terminal';
 import {
 	BranchesNode,
@@ -57,8 +54,6 @@ import {
 	ViewNode,
 	ViewRefFileNode,
 	ViewRefNode,
-	WorktreeNode,
-	WorktreesNode,
 } from './nodes';
 
 interface CompareSelectedInfo {
@@ -68,7 +63,7 @@ interface CompareSelectedInfo {
 }
 
 export class ViewCommands {
-	constructor(private readonly container: Container) {
+	constructor() {
 		commands.registerCommand('gitlens.views.clearNode', (n: ViewNode) => canClearNode(n) && n.clear(), this);
 		commands.registerCommand(
 			'gitlens.views.copy',
@@ -229,16 +224,6 @@ export class ViewCommands {
 
 		commands.registerCommand('gitlens.views.createPullRequest', this.createPullRequest, this);
 		commands.registerCommand('gitlens.views.openPullRequest', this.openPullRequest, this);
-
-		commands.registerCommand('gitlens.views.createWorktree', this.createWorktree, this);
-		commands.registerCommand('gitlens.views.deleteWorktree', this.deleteWorktree, this);
-		commands.registerCommand('gitlens.views.openWorktree', this.openWorktree, this);
-		commands.registerCommand('gitlens.views.revealWorktreeInExplorer', this.revealWorktreeInExplorer, this);
-		commands.registerCommand(
-			'gitlens.views.openWorktreeInNewWindow',
-			n => this.openWorktree(n, { location: OpenWorkspaceLocation.NewWindow }),
-			this,
-		);
 	}
 
 	@debug()
@@ -308,43 +293,10 @@ export class ViewCommands {
 				? node.branch
 				: undefined;
 		if (from == null) {
-			const branch = await this.container.git.getBranch(
-				node?.repoPath ?? this.container.git.getBestRepository()?.uri,
-			);
+			const branch = await Container.git.getBranch(node?.repoPath ?? (await Container.git.getActiveRepoPath()));
 			from = branch;
 		}
 		return GitActions.Branch.create(node?.repoPath, from);
-	}
-
-	@debug()
-	private async createWorktree(node?: BranchNode | WorktreesNode) {
-		if (node instanceof WorktreesNode) {
-			node = undefined;
-		}
-		if (node != null && !(node instanceof BranchNode)) return undefined;
-
-		return GitActions.Worktree.create(node?.repoPath, undefined, node?.ref);
-	}
-
-	@debug()
-	private openWorktree(node: WorktreeNode, options?: { location?: OpenWorkspaceLocation }) {
-		if (!(node instanceof WorktreeNode)) return undefined;
-
-		return GitActions.Worktree.open(node.worktree, options);
-	}
-
-	@debug()
-	private revealWorktreeInExplorer(node: WorktreeNode) {
-		if (!(node instanceof WorktreeNode)) return undefined;
-
-		return GitActions.Worktree.revealInFileExplorer(node.worktree);
-	}
-
-	@debug()
-	private async deleteWorktree(node: WorktreeNode) {
-		if (!(node instanceof WorktreeNode)) return undefined;
-
-		return GitActions.Worktree.remove(node.repoPath, node.worktree.uri);
 	}
 
 	@debug()
@@ -389,9 +341,7 @@ export class ViewCommands {
 				? node.branch
 				: undefined;
 		if (from == null) {
-			const branch = await this.container.git.getBranch(
-				node?.repoPath ?? this.container.git.getBestRepository()?.uri,
-			);
+			const branch = await Container.git.getBranch(node?.repoPath ?? (await Container.git.getActiveRepoPath()));
 			from = branch;
 		}
 		return GitActions.Tag.create(node?.repoPath, from);
@@ -441,7 +391,7 @@ export class ViewCommands {
 		}
 
 		void (await this.openFile(node, { preserveFocus: true, preview: true }));
-		void (await this.container.fileAnnotations.toggle(
+		void (await Container.fileAnnotations.toggle(
 			window.activeTextEditor,
 			FileAnnotationType.Changes,
 			{ sha: node.ref.ref },
@@ -463,7 +413,7 @@ export class ViewCommands {
 		}
 
 		void (await this.openFile(node, { preserveFocus: true, preview: true }));
-		void (await this.container.fileAnnotations.toggle(
+		void (await Container.fileAnnotations.toggle(
 			window.activeTextEditor,
 			FileAnnotationType.Changes,
 			{ sha: node.ref.ref, only: true },
@@ -507,7 +457,7 @@ export class ViewCommands {
 	private openInTerminal(node: RepositoryNode | RepositoryFolderNode) {
 		if (!(node instanceof RepositoryNode) && !(node instanceof RepositoryFolderNode)) return Promise.resolve();
 
-		return executeCoreCommand(CoreCommands.OpenInTerminal, Uri.file(node.repo.path));
+		return commands.executeCommand(BuiltInCommands.OpenInTerminal, Uri.file(node.repo.path));
 	}
 
 	@debug()
@@ -528,7 +478,7 @@ export class ViewCommands {
 	@debug()
 	private publishRepository(node: BranchNode | BranchTrackingStatusNode) {
 		if (node instanceof BranchNode || node instanceof BranchTrackingStatusNode) {
-			return executeCoreGitCommand(CoreGitCommands.Publish, Uri.file(node.repoPath));
+			return commands.executeCommand(BuiltInGitCommands.Publish, Uri.file(node.repoPath));
 		}
 		return Promise.resolve();
 	}
@@ -675,7 +625,7 @@ export class ViewCommands {
 			return;
 		}
 
-		void (await this.container.git.stageFile(node.repoPath, node.file.path));
+		void (await Container.git.stageFile(node.repoPath, node.file.fileName));
 		void node.triggerChange();
 	}
 
@@ -683,7 +633,7 @@ export class ViewCommands {
 	private async stageDirectory(node: FolderNode) {
 		if (!(node instanceof FolderNode) || !node.relativePath) return;
 
-		void (await this.container.git.stageDirectory(node.repoPath, node.relativePath));
+		void (await Container.git.stageDirectory(node.repoPath, node.relativePath));
 		void node.triggerChange();
 	}
 
@@ -703,7 +653,7 @@ export class ViewCommands {
 	@debug()
 	private switch(node?: ViewRefNode | BranchesNode) {
 		if (node == null) {
-			return GitActions.switchTo(this.container.git.highlander);
+			return GitActions.switchTo(Container.git.getHighlanderRepoPath());
 		}
 
 		if (!(node instanceof ViewRefNode) && !(node instanceof BranchesNode)) return Promise.resolve();
@@ -718,7 +668,7 @@ export class ViewCommands {
 	private async undoCommit(node: CommitNode | FileRevisionAsCommitNode) {
 		if (!(node instanceof CommitNode) && !(node instanceof FileRevisionAsCommitNode)) return;
 
-		const repo = await Container.instance.git.getOrOpenScmRepository(node.repoPath);
+		const repo = await GitService.getOrOpenBuiltInGitRepository(node.repoPath);
 		const commit = await repo?.getCommit('HEAD');
 
 		if (commit?.hash !== node.ref.ref) {
@@ -732,7 +682,7 @@ export class ViewCommands {
 			return;
 		}
 
-		await executeCoreGitCommand(CoreGitCommands.UndoCommit, node.repoPath);
+		await commands.executeCommand(BuiltInGitCommands.UndoCommit, node.repoPath);
 	}
 
 	@debug()
@@ -752,7 +702,7 @@ export class ViewCommands {
 			return;
 		}
 
-		void (await this.container.git.unStageFile(node.repoPath, node.file.path));
+		void (await Container.git.unStageFile(node.repoPath, node.file.fileName));
 		void node.triggerChange();
 	}
 
@@ -760,7 +710,7 @@ export class ViewCommands {
 	private async unstageDirectory(node: FolderNode) {
 		if (!(node instanceof FolderNode) || !node.relativePath) return;
 
-		void (await this.container.git.unStageDirectory(node.repoPath, node.relativePath));
+		void (await Container.git.unStageDirectory(node.repoPath, node.relativePath));
 		void node.triggerChange();
 	}
 
@@ -781,7 +731,7 @@ export class ViewCommands {
 	private compareHeadWith(node: ViewRefNode) {
 		if (!(node instanceof ViewRefNode)) return Promise.resolve();
 
-		return this.container.searchAndCompareView.compare(node.repoPath, 'HEAD', node.ref);
+		return Container.searchAndCompareView.compare(node.repoPath, 'HEAD', node.ref);
 	}
 
 	@debug()
@@ -789,27 +739,27 @@ export class ViewCommands {
 		if (!(node instanceof BranchNode)) return Promise.resolve();
 		if (node.branch.upstream == null) return Promise.resolve();
 
-		return this.container.searchAndCompareView.compare(node.repoPath, node.ref, node.branch.upstream.name);
+		return Container.searchAndCompareView.compare(node.repoPath, node.ref, node.branch.upstream.name);
 	}
 
 	@debug()
 	private compareWorkingWith(node: ViewRefNode) {
 		if (!(node instanceof ViewRefNode)) return Promise.resolve();
 
-		return this.container.searchAndCompareView.compare(node.repoPath, '', node.ref);
+		return Container.searchAndCompareView.compare(node.repoPath, '', node.ref);
 	}
 
 	@debug()
 	private async compareAncestryWithWorking(node: BranchNode) {
 		if (!(node instanceof BranchNode)) return undefined;
 
-		const branch = await this.container.git.getBranch(node.repoPath);
+		const branch = await Container.git.getBranch(node.repoPath);
 		if (branch == null) return undefined;
 
-		const commonAncestor = await this.container.git.getMergeBase(node.repoPath, branch.ref, node.ref.ref);
+		const commonAncestor = await Container.git.getMergeBase(node.repoPath, branch.ref, node.ref.ref);
 		if (commonAncestor == null) return undefined;
 
-		return this.container.searchAndCompareView.compare(
+		return Container.searchAndCompareView.compare(
 			node.repoPath,
 			{ ref: commonAncestor, label: `ancestry with ${node.ref.ref} (${GitRevision.shorten(commonAncestor)})` },
 			'',
@@ -820,14 +770,14 @@ export class ViewCommands {
 	private compareWithSelected(node: ViewRefNode) {
 		if (!(node instanceof ViewRefNode)) return;
 
-		this.container.searchAndCompareView.compareWithSelected(node.repoPath, node.ref);
+		Container.searchAndCompareView.compareWithSelected(node.repoPath, node.ref);
 	}
 
 	@debug()
 	private selectForCompare(node: ViewRefNode) {
 		if (!(node instanceof ViewRefNode)) return;
 
-		this.container.searchAndCompareView.selectForCompare(node.repoPath, node.ref);
+		Container.searchAndCompareView.selectForCompare(node.repoPath, node.ref);
 	}
 
 	@debug()
@@ -1016,7 +966,7 @@ export class ViewCommands {
 		// 	};
 
 		// 	const uri = GitUri.fromFile(file, repoPath, ref);
-		// 	await executeCommand(Commands.DiffWithWorking, uri, args);
+		// 	await commands.executeCommand(Commands.DiffWithWorking, uri, args);
 		// }
 	}
 
@@ -1046,7 +996,7 @@ export class ViewCommands {
 					preview: true,
 				},
 			});
-		} else if (node instanceof FileRevisionAsCommitNode && node.commit.file?.hasConflicts) {
+		} else if (node instanceof FileRevisionAsCommitNode && node.commit.hasConflicts) {
 			const baseUri = await node.getConflictBaseUri();
 			if (baseUri != null) {
 				return executeEditorCommand<DiffWithWorkingCommandArgs>(Commands.DiffWithWorking, undefined, {
@@ -1111,7 +1061,7 @@ export class ViewCommands {
 	}
 
 	@debug()
-	private async openRevision(
+	private openRevision(
 		node:
 			| CommitFileNode
 			| FileRevisionAsCommitNode
@@ -1137,16 +1087,16 @@ export class ViewCommands {
 		let uri = options.revisionUri;
 		if (uri == null) {
 			if (node instanceof ResultsFileNode || node instanceof MergeConflictFileNode) {
-				uri = Container.instance.git.getRevisionUri(node.uri);
+				uri = GitUri.toRevisionUri(node.uri);
 			} else {
 				uri =
-					node.commit.file?.status === 'D'
-						? Container.instance.git.getRevisionUri(
-								(await node.commit.getPreviousSha()) ?? GitRevision.deletedOrMissing,
-								node.commit.file.path,
+					node.commit.status === 'D'
+						? GitUri.toRevisionUri(
+								node.commit.previousSha!,
+								node.commit.previousUri.fsPath,
 								node.commit.repoPath,
 						  )
-						: Container.instance.git.getRevisionUri(node.uri);
+						: GitUri.toRevisionUri(node.uri);
 			}
 		}
 

@@ -1,8 +1,7 @@
+'use strict';
 import { DateStyle } from '../../config';
-import { Container } from '../../container';
-import { formatDate, fromNow } from '../../system/date';
-import { memoize } from '../../system/decorators/memoize';
-import { GitRevision } from './reference';
+import { Dates, memoize } from '../../system';
+import { CommitDateFormatting, GitRevision } from '../git';
 
 export interface GitReflog {
 	readonly repoPath: string;
@@ -28,18 +27,22 @@ export class GitReflogRecord {
 		public readonly details: string | undefined,
 	) {}
 
-	@memoize<GitReflogRecord['formatDate']>(format => format ?? 'MMMM Do, YYYY h:mma')
+	@memoize<GitReflogRecord['formatDate']>(format => (format == null ? 'MMMM Do, YYYY h:mma' : format))
 	formatDate(format?: string | null) {
-		return formatDate(this.date, format ?? 'MMMM Do, YYYY h:mma');
+		if (format == null) {
+			format = 'MMMM Do, YYYY h:mma';
+		}
+
+		return this.dateFormatter.format(format);
 	}
 
 	formatDateFromNow() {
-		return fromNow(this.date);
+		return this.dateFormatter.fromNow();
 	}
 
 	get formattedDate(): string {
-		return Container.instance.CommitDateFormatting.dateStyle === DateStyle.Absolute
-			? this.formatDate(Container.instance.CommitDateFormatting.dateFormat)
+		return CommitDateFormatting.dateStyle === DateStyle.Absolute
+			? this.formatDate(CommitDateFormatting.dateFormat)
 			: this.formatDateFromNow();
 	}
 
@@ -83,5 +86,10 @@ export class GitReflogRecord {
 		if (selector !== undefined) {
 			this._selector = selector;
 		}
+	}
+
+	@memoize()
+	private get dateFormatter(): Dates.DateFormatter {
+		return Dates.getFormatter(this.date);
 	}
 }

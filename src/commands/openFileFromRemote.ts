@@ -1,13 +1,11 @@
+'use strict';
 import { env, Range, Uri, window } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { openEditor } from '../system/utils';
-import { Command } from './base';
+import { Container } from '../container';
+import { command, Command, Commands, openEditor } from './common';
 
 @command()
 export class OpenFileFromRemoteCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.OpenFileFromRemote);
 	}
 
@@ -27,9 +25,9 @@ export class OpenFileFromRemoteCommand extends Command {
 		});
 		if (url == null || url.length === 0) return;
 
-		let local = await this.container.git.getLocalInfoFromRemoteUri(Uri.parse(url));
+		let local = await Container.git.getLocalInfoFromRemoteUri(Uri.parse(url));
 		if (local == null) {
-			local = await this.container.git.getLocalInfoFromRemoteUri(Uri.parse(url), { validate: false });
+			local = await Container.git.getLocalInfoFromRemoteUri(Uri.parse(url), { validate: false });
 			if (local == null) {
 				void window.showWarningMessage('Unable to parse the provided remote url.');
 

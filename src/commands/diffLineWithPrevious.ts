@@ -1,12 +1,11 @@
+'use strict';
 import { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
+import { GitCommit } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitCommit } from '../git/models';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command, executeCommand } from '../system/command';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { ActiveEditorCommand, command, Commands, executeCommand, getCommandUri } from './common';
 import { DiffWithCommandArgs } from './diffWith';
 
 export interface DiffLineWithPreviousCommandArgs {
@@ -18,7 +17,7 @@ export interface DiffLineWithPreviousCommandArgs {
 
 @command()
 export class DiffLineWithPreviousCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.DiffLineWithPrevious);
 	}
 
@@ -31,10 +30,10 @@ export class DiffLineWithPreviousCommand extends ActiveEditorCommand {
 			args.line = editor?.selection.active.line ?? 0;
 		}
 
-		const gitUri = args.commit?.getGitUri() ?? (await GitUri.fromUri(uri));
+		const gitUri = args.commit != null ? GitUri.fromCommit(args.commit) : await GitUri.fromUri(uri);
 
 		try {
-			const diffUris = await this.container.git.getPreviousComparisonUrisForLine(
+			const diffUris = await Container.git.getPreviousLineDiffUris(
 				gitUri.repoPath!,
 				gitUri,
 				args.line,

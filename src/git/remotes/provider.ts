@@ -1,3 +1,4 @@
+'use strict';
 import {
 	authentication,
 	AuthenticationSession,
@@ -10,26 +11,22 @@ import {
 } from 'vscode';
 import { DynamicAutolinkReference } from '../../annotations/autolinks';
 import { AutolinkReference } from '../../config';
+import { WorkspaceState } from '../../constants';
 import { Container } from '../../container';
-import { AuthenticationError, ProviderRequestClientError } from '../../errors';
 import { Logger } from '../../logger';
-import { WorkspaceStorageKeys } from '../../storage';
-import { gate } from '../../system/decorators/gate';
-import { debug, log } from '../../system/decorators/log';
-import { encodeUrl } from '../../system/encoding';
-import { isPromise } from '../../system/promise';
+import { debug, Encoding, gate, log, Promises } from '../../system';
 import {
 	Account,
 	DefaultBranch,
-	GitCommit,
+	GitLogCommit,
 	IssueOrPullRequest,
 	PullRequest,
 	PullRequestState,
 	RemoteProviderReference,
 	Repository,
-} from '../models';
+} from '../models/models';
 
-export const enum RemoteResourceType {
+export enum RemoteResourceType {
 	Branch = 'branch',
 	Branches = 'branches',
 	Commit = 'commit',
@@ -81,7 +78,7 @@ export type RemoteResource =
 	| {
 			type: RemoteResourceType.Revision;
 			branchOrTag?: string;
-			commit?: GitCommit;
+			commit?: GitLogCommit;
 			fileName: string;
 			range?: Range;
 			sha?: string;
@@ -146,7 +143,7 @@ export abstract class RemoteProvider implements RemoteProviderReference {
 		void (await env.clipboard.writeText(url));
 	}
 
-	hasRichApi(): this is RichRemoteProvider {
+	hasApi(): this is RichRemoteProvider {
 		return RichRemoteProvider.is(this);
 	}
 
@@ -237,28 +234,31 @@ export abstract class RemoteProvider implements RemoteProviderReference {
 	protected encodeUrl(url: string): string;
 	protected encodeUrl(url: string | undefined): string | undefined;
 	protected encodeUrl(url: string | undefined): string | undefined {
-		return encodeUrl(url)?.replace(/#/g, '%23');
+		return Encoding.encodeUrl(url);
 	}
 }
 
-const _connectedCache = new Set<string>();
 const _onDidChangeAuthentication = new EventEmitter<{ reason: 'connected' | 'disconnected'; key: string }>();
-function fireAuthenticationChanged(key: string, reason: 'connected' | 'disconnected') {
-	// Only fire events if the key is being connected for the first time (we could probably do the same for disconnected, but better safe on those imo)
-	if (_connectedCache.has(key)) {
-		if (reason === 'connected') return;
-
-		_connectedCache.delete(key);
-	} else if (reason === 'connected') {
-		_connectedCache.add(key);
-	}
-
-	_onDidChangeAuthentication.fire({ key: key, reason: reason });
-}
 
 export class Authentication {
 	static get onDidChange(): Event<{ reason: 'connected' | 'disconnected'; key: string }> {
 		return _onDidChangeAuthentication.event;
+	}
+}
+
+export class AuthenticationError extends Error {
+	constructor(private original: Error) {
+		super(original.message);
+
+		Error.captureStackTrace?.(this, AuthenticationError);
+	}
+}
+
+export class ClientError extends Error {
+	constructor(private original: Error) {
+		super(original.message);
+
+		Error.captureStackTrace?.(this, ClientError);
 	}
 }
 
@@ -281,7 +281,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 	constructor(domain: string, path: string, protocol?: string, name?: string, custom?: boolean) {
 		super(domain, path, protocol, name, custom);
 
-		Container.instance.context.subscriptions.push(
+		Container.context.subscriptions.push(
 			// TODO@eamodio revisit how connections are linked or not
 			Authentication.onDidChange(e => {
 				if (e.key !== this.key) return;
@@ -303,8 +303,8 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		return this.custom ? `${this.name}:${this.domain}` : this.name;
 	}
 
-	private get connectedKey(): `${WorkspaceStorageKeys.ConnectedPrefix}${string}` {
-		return `${WorkspaceStorageKeys.ConnectedPrefix}${this.key}`;
+	private get connectedKey() {
+		return `${WorkspaceState.ConnectedPrefix}${this.key}`;
 	}
 
 	get maybeConnected(): boolean | undefined {
@@ -339,18 +339,18 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 
 	@log()
 	disconnect(silent: boolean = false): void {
-		const connected = this._session != null;
+		const disconnected = this._session != null;
 
 		this.invalidClientExceptionCount = 0;
 		this._prsByCommit.clear();
 		this._session = null;
 
-		if (connected) {
-			void Container.instance.storage.storeWorkspace(this.connectedKey, false);
+		if (disconnected) {
+			void Container.context.workspaceState.update(this.connectedKey, false);
 
 			this._onDidChange.fire();
 			if (!silent) {
-				fireAuthenticationChanged(this.key, 'disconnected');
+				_onDidChangeAuthentication.fire({ reason: 'disconnected', key: this.key });
 			}
 		}
 	}
@@ -383,7 +383,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		} catch (ex) {
 			Logger.error(ex, cc);
 
-			if (ex instanceof AuthenticationError || ex instanceof ProviderRequestClientError) {
+			if (ex instanceof ClientError || ex instanceof AuthenticationError) {
 				this.handleClientException();
 			}
 			return undefined;
@@ -418,7 +418,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		} catch (ex) {
 			Logger.error(ex, cc);
 
-			if (ex instanceof AuthenticationError || ex instanceof ProviderRequestClientError) {
+			if (ex instanceof ClientError || ex instanceof AuthenticationError) {
 				this.handleClientException();
 			}
 			return undefined;
@@ -448,7 +448,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		} catch (ex) {
 			Logger.error(ex, cc);
 
-			if (ex instanceof AuthenticationError || ex instanceof ProviderRequestClientError) {
+			if (ex instanceof ClientError || ex instanceof AuthenticationError) {
 				this.handleClientException();
 			}
 			return undefined;
@@ -474,7 +474,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		} catch (ex) {
 			Logger.error(ex, cc);
 
-			if (ex instanceof AuthenticationError || ex instanceof ProviderRequestClientError) {
+			if (ex instanceof ClientError || ex instanceof AuthenticationError) {
 				this.handleClientException();
 			}
 			return undefined;
@@ -507,7 +507,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		} catch (ex) {
 			Logger.error(ex, cc);
 
-			if (ex instanceof AuthenticationError || ex instanceof ProviderRequestClientError) {
+			if (ex instanceof ClientError || ex instanceof AuthenticationError) {
 				this.handleClientException();
 			}
 			return undefined;
@@ -532,7 +532,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 			pr = this.getPullRequestForCommitCore(ref);
 			this._prsByCommit.set(ref, pr);
 		}
-		if (pr == null || !isPromise(pr)) return pr ?? undefined;
+		if (pr == null || !Promises.is(pr)) return pr ?? undefined;
 
 		return pr.then(pr => pr ?? undefined);
 	}
@@ -554,7 +554,7 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 
 			this._prsByCommit.delete(ref);
 
-			if (ex instanceof AuthenticationError || ex instanceof ProviderRequestClientError) {
+			if (ex instanceof ClientError || ex instanceof AuthenticationError) {
 				this.handleClientException();
 			}
 			return null;
@@ -570,11 +570,11 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 	private async ensureSession(createIfNeeded: boolean): Promise<AuthenticationSession | undefined> {
 		if (this._session != null) return this._session;
 
-		if (!Container.instance.config.integrations.enabled) return undefined;
+		if (!Container.config.integrations.enabled) return undefined;
 
 		if (createIfNeeded) {
-			await Container.instance.storage.deleteWorkspace(this.connectedKey);
-		} else if (Container.instance.storage.getWorkspace<boolean>(this.connectedKey) === false) {
+			await Container.context.workspaceState.update(this.connectedKey, undefined);
+		} else if (Container.context.workspaceState.get<boolean>(this.connectedKey) === false) {
 			return undefined;
 		}
 
@@ -582,10 +582,9 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		try {
 			session = await authentication.getSession(this.authProvider.id, this.authProvider.scopes, {
 				createIfNone: createIfNeeded,
-				silent: !createIfNeeded,
 			});
 		} catch (ex) {
-			await Container.instance.storage.deleteWorkspace(this.connectedKey);
+			await Container.context.workspaceState.update(this.connectedKey, undefined);
 
 			if (ex instanceof Error && ex.message.includes('User did not consent')) {
 				return undefined;
@@ -595,19 +594,17 @@ export abstract class RichRemoteProvider extends RemoteProvider {
 		}
 
 		if (session === undefined && !createIfNeeded) {
-			await Container.instance.storage.deleteWorkspace(this.connectedKey);
+			await Container.context.workspaceState.update(this.connectedKey, undefined);
 		}
 
 		this._session = session ?? null;
 		this.invalidClientExceptionCount = 0;
 
 		if (session != null) {
-			await Container.instance.storage.storeWorkspace(this.connectedKey, true);
+			await Container.context.workspaceState.update(this.connectedKey, true);
 
-			queueMicrotask(() => {
-				this._onDidChange.fire();
-				fireAuthenticationChanged(this.key, 'connected');
-			});
+			this._onDidChange.fire();
+			_onDidChangeAuthentication.fire({ reason: 'connected', key: this.key });
 		}
 
 		return session ?? undefined;

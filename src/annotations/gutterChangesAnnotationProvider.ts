@@ -1,3 +1,4 @@
+'use strict';
 import {
 	CancellationToken,
 	DecorationOptions,
@@ -14,11 +15,10 @@ import {
 } from 'vscode';
 import { FileAnnotationType } from '../configuration';
 import { Container } from '../container';
-import { GitCommit, GitDiff } from '../git/models';
+import { GitDiff, GitLogCommit } from '../git/git';
 import { Hovers } from '../hovers/hovers';
 import { Logger } from '../logger';
-import { log } from '../system/decorators/log';
-import { Stopwatch } from '../system/stopwatch';
+import { log, Strings } from '../system';
 import { GitDocumentState, TrackedDocument } from '../trackers/gitDocumentTracker';
 import { AnnotationContext, AnnotationProviderBase } from './annotationProvider';
 import { Decorations } from './fileAnnotationController';
@@ -29,14 +29,10 @@ export interface ChangesAnnotationContext extends AnnotationContext {
 }
 
 export class GutterChangesAnnotationProvider extends AnnotationProviderBase<ChangesAnnotationContext> {
-	private state: { commit: GitCommit | undefined; diffs: GitDiff[] } | undefined;
+	private state: { commit: GitLogCommit | undefined; diffs: GitDiff[] } | undefined;
 	private hoverProviderDisposable: Disposable | undefined;
 
-	constructor(
-		editor: TextEditor,
-		trackedDocument: TrackedDocument<GitDocumentState>,
-		private readonly container: Container,
-	) {
+	constructor(editor: TextEditor, trackedDocument: TrackedDocument<GitDocumentState>) {
 		super(FileAnnotationType.Changes, editor, trackedDocument);
 	}
 
@@ -74,19 +70,19 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 		let ref1 = this.trackedDocument.uri.sha;
 		let ref2 = context?.sha != null && context.sha !== ref1 ? `${context.sha}^` : undefined;
 
-		let commit: GitCommit | undefined;
+		let commit: GitLogCommit | undefined;
 
 		let localChanges = ref1 == null && ref2 == null;
 		if (localChanges) {
-			let ref = await this.container.git.getOldestUnpushedRefForFile(
+			let ref = await Container.git.getOldestUnpushedRefForFile(
 				this.trackedDocument.uri.repoPath!,
-				this.trackedDocument.uri,
+				this.trackedDocument.uri.fsPath,
 			);
 			if (ref != null) {
 				ref = `${ref}^`;
-				commit = await this.container.git.getCommitForFile(
+				commit = await Container.git.getCommitForFile(
 					this.trackedDocument.uri.repoPath,
-					this.trackedDocument.uri,
+					this.trackedDocument.uri.fsPath,
 					{ ref: ref },
 				);
 				if (commit != null) {
@@ -100,18 +96,17 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 					localChanges = false;
 				}
 			} else {
-				const status = await this.container.git.getStatusForFile(
+				const status = await Container.git.getStatusForFile(
 					this.trackedDocument.uri.repoPath!,
-					this.trackedDocument.uri,
+					this.trackedDocument.uri.fsPath,
 				);
-				const commits = status?.getPseudoCommits(
-					this.container,
-					await this.container.git.getCurrentUser(this.trackedDocument.uri.repoPath!),
+				const commits = status?.toPsuedoCommits(
+					await Container.git.getCurrentUser(this.trackedDocument.uri.repoPath!),
 				);
 				if (commits?.length) {
-					commit = await this.container.git.getCommitForFile(
+					commit = await Container.git.getCommitForFile(
 						this.trackedDocument.uri.repoPath,
-						this.trackedDocument.uri,
+						this.trackedDocument.uri.fsPath,
 					);
 					ref1 = 'HEAD';
 				} else if (this.trackedDocument.dirty) {
@@ -123,9 +118,9 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 		}
 
 		if (!localChanges) {
-			commit = await this.container.git.getCommitForFile(
+			commit = await Container.git.getCommitForFile(
 				this.trackedDocument.uri.repoPath,
-				this.trackedDocument.uri,
+				this.trackedDocument.uri.fsPath,
 				{
 					ref: ref2 ?? ref1,
 				},
@@ -144,19 +139,19 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 			await Promise.all(
 				ref2 == null && this.editor.document.isDirty
 					? [
-							this.container.git.getDiffForFileContents(
+							Container.git.getDiffForFileContents(
 								this.trackedDocument.uri,
 								ref1!,
 								this.editor.document.getText(),
 							),
-							this.container.git.getDiffForFile(this.trackedDocument.uri, ref1, ref2),
+							Container.git.getDiffForFile(this.trackedDocument.uri, ref1, ref2),
 					  ]
-					: [this.container.git.getDiffForFile(this.trackedDocument.uri, ref1, ref2)],
+					: [Container.git.getDiffForFile(this.trackedDocument.uri, ref1, ref2)],
 			)
 		).filter(<T>(d?: T): d is T => Boolean(d));
 		if (!diffs?.length) return false;
 
-		const sw = new Stopwatch(cc!);
+		let start = process.hrtime();
 
 		const decorationsMap = new Map<
 			string,
@@ -166,7 +161,12 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 		// If we want to only show changes from the specified sha, get the blame so we can compare with "visible" shas
 		const blame =
 			context?.sha != null && context?.only
-				? await this.container.git.getBlame(this.trackedDocument.uri, this.editor?.document)
+				? this.editor?.document.isDirty
+					? await Container.git.getBlameForFileContents(
+							this.trackedDocument.uri,
+							this.editor.document.getText(),
+					  )
+					: await Container.git.getBlameForFile(this.trackedDocument.uri)
 				: undefined;
 
 		let selection: Selection | undefined;
@@ -258,12 +258,14 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 			}
 		}
 
-		sw.restart({ suffix: ' to compute recent changes annotations' });
+		Logger.log(cc, `${Strings.getDurationMilliseconds(start)} ms to compute recent changes annotations`);
 
 		if (decorationsMap.size) {
+			start = process.hrtime();
+
 			this.setDecorations([...decorationsMap.values()]);
 
-			sw.stop({ suffix: ' to apply all recent changes annotations' });
+			Logger.log(cc, `${Strings.getDurationMilliseconds(start)} ms to apply recent changes annotations`);
 
 			if (selection != null && context?.selection !== false) {
 				this.editor.selection = selection;
@@ -277,7 +279,7 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 	}
 
 	registerHoverProvider() {
-		if (!this.container.config.hovers.enabled || !this.container.config.hovers.annotations.enabled) {
+		if (!Container.config.hovers.enabled || !Container.config.hovers.annotations.enabled) {
 			return;
 		}
 
@@ -290,13 +292,9 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 		);
 	}
 
-	async provideHover(
-		document: TextDocument,
-		position: Position,
-		_token: CancellationToken,
-	): Promise<Hover | undefined> {
+	provideHover(document: TextDocument, position: Position, _token: CancellationToken): Hover | undefined {
 		if (this.state == null) return undefined;
-		if (this.container.config.hovers.annotations.over !== 'line' && position.character !== 0) return undefined;
+		if (Container.config.hovers.annotations.over !== 'line' && position.character !== 0) return undefined;
 
 		const { commit, diffs } = this.state;
 
@@ -308,16 +306,8 @@ export class GutterChangesAnnotationProvider extends AnnotationProviderBase<Chan
 					position.line >= hunk.current.position.start - 1 &&
 					position.line <= hunk.current.position.end - (hasMoreDeletedLines ? 0 : 1)
 				) {
-					const markdown = await Hovers.localChangesMessage(
-						commit,
-						this.trackedDocument.uri,
-						position.line,
-						hunk,
-					);
-					if (markdown == null) return undefined;
-
 					return new Hover(
-						markdown,
+						Hovers.localChangesMessage(commit, this.trackedDocument.uri, position.line, hunk),
 						document.validateRange(
 							new Range(
 								hunk.current.position.start - 1,

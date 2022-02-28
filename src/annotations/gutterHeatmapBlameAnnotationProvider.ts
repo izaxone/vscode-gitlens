@@ -1,10 +1,9 @@
+'use strict';
 import { Range, TextEditor, TextEditorDecorationType } from 'vscode';
 import { FileAnnotationType } from '../configuration';
-import { Container } from '../container';
-import { GitCommit } from '../git/models';
+import { GitBlameCommit } from '../git/git';
 import { Logger } from '../logger';
-import { log } from '../system/decorators/log';
-import { Stopwatch } from '../system/stopwatch';
+import { log, Strings } from '../system';
 import { GitDocumentState } from '../trackers/gitDocumentTracker';
 import { TrackedDocument } from '../trackers/trackedDocument';
 import { AnnotationContext } from './annotationProvider';
@@ -12,8 +11,8 @@ import { Annotations } from './annotations';
 import { BlameAnnotationProviderBase } from './blameAnnotationProvider';
 
 export class GutterHeatmapBlameAnnotationProvider extends BlameAnnotationProviderBase {
-	constructor(editor: TextEditor, trackedDocument: TrackedDocument<GitDocumentState>, container: Container) {
-		super(FileAnnotationType.Heatmap, editor, trackedDocument, container);
+	constructor(editor: TextEditor, trackedDocument: TrackedDocument<GitDocumentState>) {
+		super(FileAnnotationType.Heatmap, editor, trackedDocument);
 	}
 
 	@log()
@@ -25,7 +24,7 @@ export class GutterHeatmapBlameAnnotationProvider extends BlameAnnotationProvide
 		const blame = await this.getBlame();
 		if (blame == null) return false;
 
-		const sw = new Stopwatch(cc!);
+		let start = process.hrtime();
 
 		const decorationsMap = new Map<
 			string,
@@ -33,7 +32,7 @@ export class GutterHeatmapBlameAnnotationProvider extends BlameAnnotationProvide
 		>();
 		const computedHeatmap = await this.getComputedHeatmap(blame);
 
-		let commit: GitCommit | undefined;
+		let commit: GitBlameCommit | undefined;
 		for (const l of blame.lines) {
 			// editor lines are 0-based
 			const editorLine = l.line - 1;
@@ -49,15 +48,17 @@ export class GutterHeatmapBlameAnnotationProvider extends BlameAnnotationProvide
 			);
 		}
 
-		sw.restart({ suffix: ' to compute heatmap annotations' });
+		Logger.log(cc, `${Strings.getDurationMilliseconds(start)} ms to compute heatmap annotations`);
 
 		if (decorationsMap.size) {
+			start = process.hrtime();
+
 			this.setDecorations([...decorationsMap.values()]);
 
-			sw.stop({ suffix: ' to apply all heatmap annotations' });
+			Logger.log(cc, `${Strings.getDurationMilliseconds(start)} ms to apply recent changes annotations`);
 		}
 
-		// this.registerHoverProviders(this.container.config.hovers.annotations);
+		// this.registerHoverProviders(Container.config.hovers.annotations);
 		return true;
 	}
 

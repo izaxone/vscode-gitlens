@@ -1,7 +1,8 @@
+'use strict';
 import { Range, Uri } from 'vscode';
 import { DynamicAutolinkReference } from '../../annotations/autolinks';
 import { AutolinkReference } from '../../config';
-import { GitRevision } from '../models';
+import { GitRevision } from '../models/models';
 import { Repository } from '../models/repository';
 import { RemoteProvider } from './provider';
 
@@ -89,29 +90,26 @@ export class BitbucketServerRemote extends RemoteProvider {
 			}
 		}
 
+		const branches = new Set<string>(
+			(
+				await repository.getBranches({
+					filter: b => b.remote,
+				})
+			).map(b => b.getNameWithoutRemote()),
+		);
+
 		// Check for a link with branch (and deal with branch names with /)
 		let branch;
-		const possibleBranches = new Map<string, string>();
 		index = path.length;
 		do {
 			index = path.lastIndexOf('/', index - 1);
 			branch = path.substring(1, index);
 
-			possibleBranches.set(branch, path.substr(index));
-		} while (index > 0);
-
-		if (possibleBranches.size !== 0) {
-			const { values: branches } = await repository.getBranches({
-				filter: b => b.remote && possibleBranches.has(b.getNameWithoutRemote()),
-			});
-			for (const branch of branches) {
-				const path = possibleBranches.get(branch.getNameWithoutRemote());
-				if (path == null) continue;
-
-				const uri = repository.toAbsoluteUri(path, { validate: options?.validate });
+			if (branches.has(branch)) {
+				const uri = repository.toAbsoluteUri(path.substr(index), { validate: options?.validate });
 				if (uri != null) return { uri: uri, startLine: startLine, endLine: endLine };
 			}
-		}
+		} while (index > 0);
 
 		return undefined;
 	}

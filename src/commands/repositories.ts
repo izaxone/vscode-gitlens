@@ -1,47 +1,37 @@
-import { executeGitCommand } from '../commands/gitCommands.actions';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+'use strict';
+import { executeGitCommand } from '../commands';
+import { Container } from '../container';
+import { command, Command, Commands } from './common';
 
 @command()
 export class FetchRepositoriesCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.FetchRepositories);
 	}
 
 	async execute() {
-		return executeGitCommand({
-			command: 'fetch',
-			state: { repos: this.container.git.openRepositories },
-		});
+		return executeGitCommand({ command: 'fetch', state: { repos: await Container.git.getOrderedRepositories() } });
 	}
 }
 
 @command()
 export class PullRepositoriesCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.PullRepositories);
 	}
 
 	async execute() {
-		return executeGitCommand({
-			command: 'pull',
-			state: { repos: this.container.git.openRepositories },
-		});
+		return executeGitCommand({ command: 'pull', state: { repos: await Container.git.getOrderedRepositories() } });
 	}
 }
 
 @command()
 export class PushRepositoriesCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.PushRepositories);
 	}
 
 	async execute() {
-		return executeGitCommand({
-			command: 'push',
-			state: { repos: this.container.git.openRepositories },
-		});
+		return executeGitCommand({ command: 'push', state: { repos: await Container.git.getOrderedRepositories() } });
 	}
 }

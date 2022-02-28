@@ -1,3 +1,4 @@
+'use strict';
 import { QuickInput, QuickInputButton, ThemeIcon, Uri } from 'vscode';
 import { Container } from '../container';
 
@@ -19,8 +20,8 @@ export class ToggleQuickInputButton implements QuickInputButton {
 		const icon = this.getToggledState().icon;
 		return typeof icon === 'string'
 			? {
-					dark: Uri.file(Container.instance.context.asAbsolutePath(`images/dark/${icon}.svg`)),
-					light: Uri.file(Container.instance.context.asAbsolutePath(`images/light/${icon}.svg`)),
+					dark: Uri.file(Container.context.asAbsolutePath(`images/dark/${icon}.svg`)),
+					light: Uri.file(Container.context.asAbsolutePath(`images/light/${icon}.svg`)),
 			  }
 			: icon;
 	}
@@ -36,9 +37,6 @@ export class ToggleQuickInputButton implements QuickInputButton {
 		this._on = value;
 	}
 
-	/**
-	 * @returns `true` if the step should be retried (refreshed)
-	 */
 	onDidClick?(quickInput: QuickInput): boolean | void | Promise<boolean | void>;
 
 	private getState() {
@@ -85,11 +83,6 @@ export namespace QuickCommandButtons {
 		}
 	};
 
-	export const PickCommit: QuickInputButton = {
-		iconPath: new ThemeIcon('git-commit'),
-		tooltip: 'Choose a Specific Commit',
-	};
-
 	export const PickCommitToggle = class extends ToggleQuickInputButton {
 		constructor(on = false, context: { showTags: boolean }, onDidClick?: (quickInput: QuickInput) => void) {
 			super(
@@ -105,11 +98,6 @@ export namespace QuickCommandButtons {
 
 			this.onDidClick = onDidClick;
 		}
-	};
-
-	export const OpenInNewWindow: QuickInputButton = {
-		iconPath: new ThemeIcon('empty-window'),
-		tooltip: 'Open in New Window',
 	};
 
 	export const RevealInSideBar: QuickInputButton = {
@@ -145,17 +133,15 @@ export namespace QuickCommandButtons {
 					on: {
 						tooltip: 'Will confirm',
 						icon: {
-							dark: Uri.file(Container.instance.context.asAbsolutePath('images/dark/icon-check.svg')),
-							light: Uri.file(Container.instance.context.asAbsolutePath('images/light/icon-check.svg')),
+							dark: Uri.file(Container.context.asAbsolutePath('images/dark/icon-check.svg')),
+							light: Uri.file(Container.context.asAbsolutePath('images/light/icon-check.svg')),
 						},
 					},
 					off: {
 						tooltip: 'Skips confirm',
 						icon: {
-							dark: Uri.file(Container.instance.context.asAbsolutePath('images/dark/icon-no-check.svg')),
-							light: Uri.file(
-								Container.instance.context.asAbsolutePath('images/light/icon-no-check.svg'),
-							),
+							dark: Uri.file(Container.context.asAbsolutePath('images/dark/icon-no-check.svg')),
+							light: Uri.file(Container.context.asAbsolutePath('images/light/icon-no-check.svg')),
 						},
 					},
 				}),

@@ -1,3 +1,4 @@
+'use strict';
 import { Disposable } from 'vscode';
 import { Container } from '../container';
 import { Logger } from '../logger';
@@ -11,11 +12,6 @@ const emptyDisposable = Object.freeze({
 });
 
 export class Api implements GitLensApi {
-	readonly #container: Container;
-	constructor(container: Container) {
-		this.#container = container;
-	}
-
 	registerActionRunner<T extends ActionContext>(action: Action<T>, runner: ActionRunner): Disposable {
 		if (runner.name === builtInActionRunnerName) {
 			throw new Error(`Cannot use the reserved name '${builtInActionRunnerName}'`);
@@ -24,7 +20,7 @@ export class Api implements GitLensApi {
 		if ((action as string) === 'hover.commandHelp') {
 			action = 'hover.commands';
 		}
-		return this.#container.actionRunners.register(action, runner);
+		return Container.actionRunners.register(action, runner);
 	}
 
 	// registerAutolinkProvider(provider: RemoteProvider): Disposable;
@@ -43,7 +39,7 @@ export function preview() {
 		if (fn == null) throw new Error('Not supported');
 
 		descriptor.value = function (this: any, ...args: any[]) {
-			if (Container.instance.insiders || Logger.isDebugging) return fn!.apply(this, args);
+			if (Container.insiders || Logger.isDebugging) return fn!.apply(this, args);
 
 			console.error('GitLens preview APIs are only available in the Insiders edition');
 			return emptyDisposable;

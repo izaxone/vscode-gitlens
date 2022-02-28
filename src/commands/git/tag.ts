@@ -1,10 +1,9 @@
+'use strict';
 import { QuickInputButtons, QuickPickItem } from 'vscode';
 import { Container } from '../../container';
-import { GitReference, GitTagReference, Repository } from '../../git/models';
-import { QuickPickItemOfT } from '../../quickpicks/items/common';
-import { FlagsQuickPickItem } from '../../quickpicks/items/flags';
-import { pluralize } from '../../system/string';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
+import { GitReference, GitTagReference, Repository } from '../../git/git';
+import { FlagsQuickPickItem, QuickPickItemOfT } from '../../quickpicks';
+import { Strings } from '../../system';
 import {
 	appendReposToTitle,
 	AsyncStepResultGenerator,
@@ -24,7 +23,6 @@ import {
 
 interface Context {
 	repos: Repository[];
-	associatedView: ViewsWithRepositoryFolders;
 	showTags: boolean;
 	title: string;
 }
@@ -68,8 +66,8 @@ export interface TagGitCommandArgs {
 export class TagGitCommand extends QuickCommand<State> {
 	private subcommand: State['subcommand'] | undefined;
 
-	constructor(container: Container, args?: TagGitCommandArgs) {
-		super(container, 'tag', 'tag', 'Tag', {
+	constructor(args?: TagGitCommandArgs) {
+		super('tag', 'tag', 'Tag', {
 			description: 'create, or delete tags',
 		});
 
@@ -129,8 +127,7 @@ export class TagGitCommand extends QuickCommand<State> {
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
-			associatedView: this.container.tagsView,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			showTags: false,
 			title: this.title,
 		};
@@ -352,7 +349,10 @@ export class TagGitCommand extends QuickCommand<State> {
 				state.references = result;
 			}
 
-			context.title = getTitle(pluralize('Tag', state.references.length, { only: true }), state.subcommand);
+			context.title = getTitle(
+				Strings.pluralize('Tag', state.references.length, { only: true }),
+				state.subcommand,
+			);
 
 			const result = yield* this.deleteCommandConfirmStep(state, context);
 			if (result === StepResult.Break) continue;

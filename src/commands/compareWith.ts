@@ -1,11 +1,16 @@
+'use strict';
 import { TextEditor, Uri } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { Container } from '../container';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { command } from '../system/command';
-import { ActiveEditorCommand, CommandContext, getCommandUri } from './base';
+import {
+	ActiveEditorCommand,
+	command,
+	CommandContext,
+	Commands,
+	getCommandUri,
+	getRepoPathOrActiveOrPrompt,
+} from './common';
 
 export interface CompareWithCommandArgs {
 	ref1?: string;
@@ -14,7 +19,7 @@ export interface CompareWithCommandArgs {
 
 @command()
 export class CompareWithCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([
 			Commands.CompareWith,
 			Commands.CompareHeadWith,
@@ -67,13 +72,13 @@ export class CompareWithCommand extends ActiveEditorCommand {
 					break;
 			}
 
-			const repoPath = (await RepositoryPicker.getBestRepositoryOrShow(uri, editor, title))?.path;
+			const repoPath = await getRepoPathOrActiveOrPrompt(uri, editor, title);
 			if (!repoPath) return;
 
 			if (args.ref1 != null && args.ref2 != null) {
-				void (await this.container.searchAndCompareView.compare(repoPath, args.ref1, args.ref2));
+				void (await Container.searchAndCompareView.compare(repoPath, args.ref1, args.ref2));
 			} else {
-				this.container.searchAndCompareView.selectForCompare(repoPath, args.ref1, { prompt: true });
+				Container.searchAndCompareView.selectForCompare(repoPath, args.ref1, { prompt: true });
 			}
 		} catch (ex) {
 			Logger.error(ex, 'CompareWithCommmand');

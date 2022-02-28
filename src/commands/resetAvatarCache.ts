@@ -1,12 +1,10 @@
+'use strict';
 import { resetAvatarCache } from '../avatars';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+import { command, Command, Commands } from './common';
 
 @command()
 export class ResetAvatarCacheCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.ResetAvatarCache);
 	}
 

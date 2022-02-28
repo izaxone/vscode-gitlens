@@ -1,10 +1,9 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { ViewBranchesLayout } from '../../configuration';
+import { Repository } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { Repository } from '../../git/models';
-import { makeHierarchical } from '../../system/array';
-import { gate } from '../../system/decorators/gate';
-import { debug } from '../../system/decorators/log';
+import { Arrays, debug, gate } from '../../system';
 import { BranchesView } from '../branchesView';
 import { RepositoriesView } from '../repositoriesView';
 import { BranchNode } from './branchNode';
@@ -45,10 +44,9 @@ export class BranchesNode extends ViewNode<BranchesView | RepositoriesView> {
 				filter: b => !b.remote,
 				sort: { current: false },
 			});
-			if (branches.values.length === 0) return [new MessageNode(this.view, this, 'No branches could be found.')];
+			if (branches.length === 0) return [new MessageNode(this.view, this, 'No branches could be found.')];
 
-			// TODO@eamodio handle paging
-			const branchNodes = branches.values.map(
+			const branchNodes = branches.map(
 				b =>
 					new BranchNode(GitUri.fromRepoPath(this.uri.repoPath!, b.ref), this.view, this, b, false, {
 						showComparison:
@@ -59,7 +57,7 @@ export class BranchesNode extends ViewNode<BranchesView | RepositoriesView> {
 			);
 			if (this.view.config.branches.layout === ViewBranchesLayout.List) return branchNodes;
 
-			const hierarchy = makeHierarchical(
+			const hierarchy = Arrays.makeHierarchical(
 				branchNodes,
 				n => n.treeHierarchy,
 				(...paths) => paths.join('/'),

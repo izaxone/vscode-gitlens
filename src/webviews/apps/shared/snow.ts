@@ -1,3 +1,4 @@
+'use strict';
 /*global window document requestAnimationFrame*/
 
 function randomBetween(min: number, max: number) {

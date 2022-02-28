@@ -1,3 +1,4 @@
+'use strict';
 import { TextEditor, Uri } from 'vscode';
 
 abstract class Comparer<T> {

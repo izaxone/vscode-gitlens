@@ -1,12 +1,18 @@
+'use strict';
 import { Disposable, env, QuickInputButton, ThemeIcon, Uri, window } from 'vscode';
-import type { OpenOnRemoteCommandArgs } from '../commands';
-import { Commands, GlyphChars } from '../constants';
+import { Commands, OpenOnRemoteCommandArgs } from '../commands';
+import { GlyphChars } from '../constants';
 import { Container } from '../container';
-import { GitBranch, GitRemote } from '../git/models';
-import { getNameFromRemoteResource, RemoteProvider, RemoteResource, RemoteResourceType } from '../git/remotes/provider';
+import {
+	getNameFromRemoteResource,
+	GitBranch,
+	GitRemote,
+	RemoteProvider,
+	RemoteResource,
+	RemoteResourceType,
+} from '../git/git';
 import { Keys } from '../keyboard';
-import { CommandQuickPickItem } from '../quickpicks/items/common';
-import { getQuickPickIgnoreFocusOut } from '../system/utils';
+import { CommandQuickPickItem, getQuickPickIgnoreFocusOut } from '../quickpicks';
 
 export class ConfigureCustomRemoteProviderCommandQuickPickItem extends CommandQuickPickItem {
 	constructor() {
@@ -47,8 +53,8 @@ export class CopyOrOpenRemoteCommandQuickPickItem extends CommandQuickPickItem {
 		} else if (resource.type === RemoteResourceType.CreatePullRequest) {
 			let branch = resource.base.branch;
 			if (branch == null) {
-				branch = await Container.instance.git.getDefaultBranchName(this.remote.repoPath, this.remote.name);
-				if (branch == null && this.remote.hasRichProvider()) {
+				branch = await Container.git.getDefaultBranchName(this.remote.repoPath, this.remote.name);
+				if (branch == null && this.remote.provider.hasApi()) {
 					const defaultBranch = await this.remote.provider.getDefaultBranch?.();
 					branch = defaultBranch?.name;
 				}
@@ -67,16 +73,14 @@ export class CopyOrOpenRemoteCommandQuickPickItem extends CommandQuickPickItem {
 			// Since Bitbucket can't support branch names in the url (other than with the default branch),
 			// turn this into a `Revision` request
 			const { branchOrTag } = resource;
-			const [branches, tags] = await Promise.allSettled([
-				Container.instance.git.getBranches(this.remote.repoPath, {
-					filter: b => b.name === branchOrTag || b.getNameWithoutRemote() === branchOrTag,
-				}),
-				Container.instance.git.getTags(this.remote.repoPath, { filter: t => t.name === branchOrTag }),
-			]);
+			const branchesOrTags = await Container.git.getBranchesAndOrTags(this.remote.repoPath, {
+				filter: {
+					branches: b => b.name === branchOrTag || GitBranch.getNameWithoutRemote(b.name) === branchOrTag,
+					tags: b => b.name === branchOrTag,
+				},
+			});
 
-			const sha =
-				(branches.status === 'fulfilled' ? branches.value.values[0]?.sha : undefined) ??
-				(tags.status === 'fulfilled' ? tags.value.values[0]?.sha : undefined);
+			const sha = branchesOrTags?.[0]?.sha;
 			if (sha) {
 				resource = { ...resource, type: RemoteResourceType.Revision, sha: sha };
 			}
@@ -99,7 +103,7 @@ export class CopyRemoteResourceCommandQuickPickItem extends CommandQuickPickItem
 			clipboard: true,
 		};
 		super(
-			`$(copy) Copy ${providers?.length ? providers[0].name : 'Remote'} ${getNameFromRemoteResource(
+			`$(clippy) Copy ${providers?.length ? providers[0].name : 'Remote'} ${getNameFromRemoteResource(
 				resource,
 			)} Url${providers?.length === 1 ? '' : GlyphChars.Ellipsis}`,
 			Commands.OpenOnRemote,
@@ -180,6 +184,7 @@ export namespace RemoteProviderPicker {
 		const quickpick = window.createQuickPick<
 			ConfigureCustomRemoteProviderCommandQuickPickItem | CopyOrOpenRemoteCommandQuickPickItem
 		>();
+		(quickpick as any).enableProposedApi = true;
 		quickpick.ignoreFocusOut = getQuickPickIgnoreFocusOut();
 
 		const disposables: Disposable[] = [];

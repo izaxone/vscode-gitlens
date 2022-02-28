@@ -1,12 +1,14 @@
-/*global*/
-import './welcome.scss';
-import type { State } from '../../welcome/protocol';
+'use strict';
+/*global window*/
+import '../scss/welcome.scss';
+import { WelcomeState } from '../../protocol';
 import { AppWithConfig } from '../shared/appWithConfigBase';
 // import { Snow } from '../shared/snow';
 
-export class WelcomeApp extends AppWithConfig<State> {
+export class WelcomeApp extends AppWithConfig<WelcomeState> {
 	constructor() {
-		super('WelcomeApp');
+		super('WelcomeApp', (window as any).bootstrap);
+		(window as any).bootstrap = undefined;
 	}
 }
 

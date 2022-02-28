@@ -1,10 +1,10 @@
+'use strict';
 import { TreeItem, TreeItemCollapsibleState, window } from 'vscode';
 import { GlyphChars } from '../../constants';
+import { Container } from '../../container';
+import { GitLog, GitReflogRecord } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitLog, GitReflogRecord } from '../../git/models';
-import { gate } from '../../system/decorators/gate';
-import { debug } from '../../system/decorators/log';
-import { map } from '../../system/iterable';
+import { debug, gate, Iterables } from '../../system';
 import { ViewsWithCommits } from '../viewBase';
 import { CommitNode } from './commitNode';
 import { LoadMoreNode, MessageNode } from './common';
@@ -46,7 +46,7 @@ export class ReflogRecordNode extends ViewNode<ViewsWithCommits> implements Page
 		if (log === undefined) return [new MessageNode(this.view, this, 'No commits could be found.')];
 
 		const children: (CommitNode | LoadMoreNode)[] = [
-			...map(log.commits.values(), c => new CommitNode(this.view, this, c)),
+			...Iterables.map(log.commits.values(), c => new CommitNode(this.view, this, c)),
 		];
 
 		if (log.hasMore) {
@@ -90,7 +90,7 @@ export class ReflogRecordNode extends ViewNode<ViewsWithCommits> implements Page
 	private async getLog() {
 		if (this._log === undefined) {
 			const range = `${this.record.previousSha}..${this.record.sha}`;
-			this._log = await this.view.container.git.getLog(this.uri.repoPath!, {
+			this._log = await Container.git.getLog(this.uri.repoPath!, {
 				limit: this.limit ?? this.view.config.defaultItemLimit,
 				ref: range,
 			});

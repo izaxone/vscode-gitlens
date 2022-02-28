@@ -1,4 +1,5 @@
-import { cancellable, isPromise } from '../promise';
+'use strict';
+import { cancellable, is as isPromise } from '../promise';
 
 export function timeout(timeout: number): any;
 export function timeout(timeoutFromLastArg: true, defaultTimeout?: number): any;

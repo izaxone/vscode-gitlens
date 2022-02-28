@@ -1,8 +1,7 @@
+'use strict';
 import { Disposable, Event, EventEmitter, Selection, TextEditor, TextEditorSelectionChangeEvent, window } from 'vscode';
-import { Logger } from '../logger';
-import { debug } from '../system/decorators/log';
-import { debounce, Deferrable } from '../system/function';
-import { isTextEditor } from '../system/utils';
+import { isTextEditor } from '../constants';
+import { debug, Functions } from '../system';
 
 export interface LinesChangeEvent {
 	readonly editor: TextEditor | undefined;
@@ -30,13 +29,13 @@ export class LineTracker<T> implements Disposable {
 
 	dispose() {
 		for (const subscriber of this._subscriptions.keys()) {
-			this.unsubscribe(subscriber);
+			this.stop(subscriber);
 		}
 	}
 
 	private onActiveTextEditorChanged(editor: TextEditor | undefined) {
-		if (editor === this._editor) return;
-		if (editor != null && !isTextEditor(editor)) return;
+		if (this._editor === editor) return;
+		if (editor !== undefined && !isTextEditor(editor)) return;
 
 		this.reset();
 		this._editor = editor;
@@ -75,7 +74,7 @@ export class LineTracker<T> implements Disposable {
 	includes(selections: LineSelection[]): boolean;
 	includes(line: number, options?: { activeOnly: boolean }): boolean;
 	includes(lineOrSelections: number | LineSelection[], options?: { activeOnly: boolean }): boolean {
-		if (typeof lineOrSelections !== 'number') {
+		if (Array.isArray(lineOrSelections)) {
 			return LineTracker.includes(lineOrSelections, this._selections);
 		}
 
@@ -105,26 +104,24 @@ export class LineTracker<T> implements Disposable {
 		this._state.clear();
 	}
 
-	private _subscriptions = new Map<unknown, Disposable[]>();
+	private _subscriptions = new Map<any, Disposable[]>();
 
-	subscribed(subscriber: unknown) {
+	isSubscribed(subscriber: any) {
 		return this._subscriptions.has(subscriber);
 	}
 
 	protected onStart?(): Disposable | undefined;
 
 	@debug({ args: false })
-	subscribe(subscriber: unknown, subscription: Disposable): Disposable {
-		const cc = Logger.getCorrelationContext();
-
+	start(subscriber: any, subscription: Disposable): Disposable {
 		const disposable = {
-			dispose: () => this.unsubscribe(subscriber),
+			dispose: () => this.stop(subscriber),
 		};
 
 		const first = this._subscriptions.size === 0;
 
 		let subs = this._subscriptions.get(subscriber);
-		if (subs == null) {
+		if (subs === undefined) {
 			subs = [subscription];
 			this._subscriptions.set(subscriber, subs);
 		} else {
@@ -132,24 +129,22 @@ export class LineTracker<T> implements Disposable {
 		}
 
 		if (first) {
-			Logger.debug(cc, 'Starting line tracker...');
-
 			this._disposable = Disposable.from(
-				window.onDidChangeActiveTextEditor(debounce(this.onActiveTextEditorChanged, 0), this),
+				window.onDidChangeActiveTextEditor(Functions.debounce(this.onActiveTextEditorChanged, 0), this),
 				window.onDidChangeTextEditorSelection(this.onTextEditorSelectionChanged, this),
 				this.onStart?.() ?? { dispose: () => {} },
 			);
 
-			queueMicrotask(() => this.onActiveTextEditorChanged(window.activeTextEditor));
+			setImmediate(() => this.onActiveTextEditorChanged(window.activeTextEditor));
 		}
 
 		return disposable;
 	}
 
 	@debug({ args: false })
-	unsubscribe(subscriber: unknown) {
+	stop(subscriber: any) {
 		const subs = this._subscriptions.get(subscriber);
-		if (subs == null) return;
+		if (subs === undefined) return;
 
 		this._subscriptions.delete(subscriber);
 		for (const sub of subs) {
@@ -158,12 +153,14 @@ export class LineTracker<T> implements Disposable {
 
 		if (this._subscriptions.size !== 0) return;
 
-		if (this._linesChangedDebounced != null) {
+		if (this._linesChangedDebounced !== undefined) {
 			this._linesChangedDebounced.cancel();
 		}
 
-		this._disposable?.dispose();
-		this._disposable = undefined;
+		if (this._disposable !== undefined) {
+			this._disposable.dispose();
+			this._disposable = undefined;
+		}
 	}
 
 	private _suspended = false;
@@ -174,8 +171,8 @@ export class LineTracker<T> implements Disposable {
 	protected onResume?(): void;
 
 	@debug()
-	resume(options?: { force?: boolean }) {
-		if (!options?.force && !this._suspended) return;
+	resume(options: { force?: boolean } = {}) {
+		if (!options.force && !this._suspended) return;
 
 		this._suspended = false;
 		void this.onResume?.();
@@ -185,8 +182,8 @@ export class LineTracker<T> implements Disposable {
 	protected onSuspend?(): void;
 
 	@debug()
-	suspend(options?: { force?: boolean }) {
-		if (!options?.force && this._suspended) return;
+	suspend(options: { force?: boolean } = {}) {
+		if (!options.force && this._suspended) return;
 
 		this._suspended = true;
 		void this.onSuspend?.();
@@ -201,14 +198,14 @@ export class LineTracker<T> implements Disposable {
 		this.onLinesChanged({ editor: this._editor, selections: this.selections, reason: reason });
 	}
 
-	private _linesChangedDebounced: Deferrable<(e: LinesChangeEvent) => void> | undefined;
+	private _linesChangedDebounced: Functions.Deferrable<(e: LinesChangeEvent) => void> | undefined;
 
 	private onLinesChanged(e: LinesChangeEvent) {
-		if (e.selections == null) {
-			queueMicrotask(() => {
-				if (e.editor !== window.activeTextEditor) return;
+		if (e.selections === undefined) {
+			setImmediate(() => {
+				if (window.activeTextEditor !== e.editor) return;
 
-				if (this._linesChangedDebounced != null) {
+				if (this._linesChangedDebounced !== undefined) {
 					this._linesChangedDebounced.cancel();
 				}
 
@@ -218,10 +215,10 @@ export class LineTracker<T> implements Disposable {
 			return;
 		}
 
-		if (this._linesChangedDebounced == null) {
-			this._linesChangedDebounced = debounce(
+		if (this._linesChangedDebounced === undefined) {
+			this._linesChangedDebounced = Functions.debounce(
 				(e: LinesChangeEvent) => {
-					if (e.editor !== window.activeTextEditor) return;
+					if (window.activeTextEditor !== e.editor) return;
 					// Make sure we are still on the same lines
 					if (!LineTracker.includes(e.selections, LineTracker.toLineSelections(e.editor?.selections))) {
 						return;
@@ -235,7 +232,7 @@ export class LineTracker<T> implements Disposable {
 		}
 
 		// If we have no pending moves, then fire an immediate pending event, and defer the real event
-		if (!this._linesChangedDebounced.pending?.()) {
+		if (!this._linesChangedDebounced.pending!()) {
 			void this.fireLinesChanged({ ...e, pending: true });
 		}
 

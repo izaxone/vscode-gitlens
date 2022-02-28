@@ -1,24 +1,21 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { ViewShowBranchComparison } from '../../configuration';
-import { GlyphChars } from '../../constants';
+import { BranchComparison, BranchComparisons, GlyphChars, WorkspaceState } from '../../constants';
+import { Container } from '../../container';
+import { GitBranch, GitRevision } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitBranch, GitRevision } from '../../git/models';
-import { CommandQuickPickItem } from '../../quickpicks/items/common';
-import { ReferencePicker } from '../../quickpicks/referencePicker';
-import { BranchComparison, BranchComparisons, WorkspaceStorageKeys } from '../../storage';
-import { gate } from '../../system/decorators/gate';
-import { debug, log } from '../../system/decorators/log';
-import { pluralize } from '../../system/string';
+import { CommandQuickPickItem, ReferencePicker } from '../../quickpicks';
+import { debug, gate, log, Strings } from '../../system';
 import { BranchesView } from '../branchesView';
 import { CommitsView } from '../commitsView';
 import { RepositoriesView } from '../repositoriesView';
-import { WorktreesView } from '../worktreesView';
 import { RepositoryNode } from './repositoryNode';
 import { CommitsQueryResults, ResultsCommitsNode } from './resultsCommitsNode';
 import { FilesQueryResults, ResultsFilesNode } from './resultsFilesNode';
 import { ContextValues, ViewNode } from './viewNode';
 
-export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | RepositoriesView | WorktreesView> {
+export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | RepositoriesView> {
 	static key = ':compare-branch';
 	static getId(repoPath: string, name: string, root: boolean): string {
 		return `${RepositoryNode.getId(repoPath)}${this.key}(${name})${root ? ':root' : ''}`;
@@ -29,7 +26,7 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 
 	constructor(
 		uri: GitUri,
-		view: BranchesView | CommitsView | RepositoriesView | WorktreesView,
+		view: BranchesView | CommitsView | RepositoriesView,
 		parent: ViewNode,
 		public readonly branch: GitBranch,
 		private showComparison: ViewShowBranchComparison,
@@ -70,13 +67,12 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 			const ahead = this.ahead;
 			const behind = this.behind;
 
-			const aheadBehindCounts = await this.view.container.git.getAheadBehindCommitCount(this.branch.repoPath, [
+			const aheadBehindCounts = await Container.git.getAheadBehindCommitCount(this.branch.repoPath, [
 				GitRevision.createRange(behind.ref1, behind.ref2, '...'),
 			]);
 			const mergeBase =
-				(await this.view.container.git.getMergeBase(this.repoPath, behind.ref1, behind.ref2, {
-					forkPoint: true,
-				})) ?? (await this.view.container.git.getMergeBase(this.repoPath, behind.ref1, behind.ref2));
+				(await Container.git.getMergeBase(this.repoPath, behind.ref1, behind.ref2, { forkPoint: true })) ??
+				(await Container.git.getMergeBase(this.repoPath, behind.ref1, behind.ref2));
 
 			this._children = [
 				new ResultsCommitsNode(
@@ -96,7 +92,7 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 					},
 					{
 						id: 'behind',
-						description: pluralize('commit', aheadBehindCounts?.behind ?? 0),
+						description: Strings.pluralize('commit', aheadBehindCounts?.behind ?? 0),
 						expand: false,
 					},
 				),
@@ -119,7 +115,7 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 					},
 					{
 						id: 'ahead',
-						description: pluralize('commit', aheadBehindCounts?.ahead ?? 0),
+						description: Strings.pluralize('commit', aheadBehindCounts?.ahead ?? 0),
 						expand: false,
 					},
 				),
@@ -185,6 +181,8 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 
 	@log()
 	async clear() {
+		if (this._compareWith == null) return;
+
 		this._compareWith = undefined;
 		await this.updateCompareWith(undefined);
 
@@ -249,17 +247,17 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 	}
 
 	private async getAheadFilesQuery(): Promise<FilesQueryResults> {
-		let files = await this.view.container.git.getDiffStatus(
+		let files = await Container.git.getDiffStatus(
 			this.repoPath,
 			GitRevision.createRange(this._compareWith?.ref || 'HEAD', this.branch.ref || 'HEAD', '...'),
 		);
 
 		if (this.compareWithWorkingTree) {
-			const workingFiles = await this.view.container.git.getDiffStatus(this.repoPath, 'HEAD');
+			const workingFiles = await Container.git.getDiffStatus(this.repoPath, 'HEAD');
 			if (workingFiles != null) {
 				if (files != null) {
 					for (const wf of workingFiles) {
-						const index = files.findIndex(f => f.path === wf.path);
+						const index = files.findIndex(f => f.fileName === wf.fileName);
 						if (index !== -1) {
 							files.splice(index, 1, wf);
 						} else {
@@ -273,19 +271,19 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 		}
 
 		return {
-			label: `${pluralize('file', files?.length ?? 0, { zero: 'No' })} changed`,
+			label: `${Strings.pluralize('file', files?.length ?? 0, { zero: 'No' })} changed`,
 			files: files,
 		};
 	}
 
 	private async getBehindFilesQuery(): Promise<FilesQueryResults> {
-		const files = await this.view.container.git.getDiffStatus(
+		const files = await Container.git.getDiffStatus(
 			this.uri.repoPath!,
 			GitRevision.createRange(this.branch.ref, this._compareWith?.ref || 'HEAD', '...'),
 		);
 
 		return {
-			label: `${pluralize('file', files?.length ?? 0, { zero: 'No' })} changed`,
+			label: `${Strings.pluralize('file', files?.length ?? 0, { zero: 'No' })} changed`,
 			files: files,
 		};
 	}
@@ -293,7 +291,7 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 	private getCommitsQuery(range: string): (limit: number | undefined) => Promise<CommitsQueryResults> {
 		const repoPath = this.uri.repoPath!;
 		return async (limit: number | undefined) => {
-			const log = await this.view.container.git.getLog(repoPath, {
+			const log = await Container.git.getLog(repoPath, {
 				limit: limit,
 				ref: range,
 			});
@@ -315,26 +313,24 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 
 	private async getFilesQuery(): Promise<FilesQueryResults> {
 		let comparison;
-		if (!this._compareWith?.ref) {
+		if (this._compareWith!.ref === '') {
 			comparison = this.branch.ref;
 		} else if (this.compareWithWorkingTree) {
-			comparison = this._compareWith.ref;
+			comparison = this._compareWith!.ref;
 		} else {
-			comparison = `${this._compareWith.ref}..${this.branch.ref}`;
+			comparison = `${this._compareWith!.ref}..${this.branch.ref}`;
 		}
 
-		const files = await this.view.container.git.getDiffStatus(this.uri.repoPath!, comparison);
+		const files = await Container.git.getDiffStatus(this.uri.repoPath!, comparison);
 
 		return {
-			label: `${pluralize('file', files?.length ?? 0, { zero: 'No' })} changed`,
+			label: `${Strings.pluralize('file', files?.length ?? 0, { zero: 'No' })} changed`,
 			files: files,
 		};
 	}
 
 	private loadCompareWith() {
-		const comparisons = this.view.container.storage.getWorkspace<BranchComparisons>(
-			WorkspaceStorageKeys.BranchComparisons,
-		);
+		const comparisons = Container.context.workspaceState.get<BranchComparisons>(WorkspaceState.BranchComparisons);
 
 		const id = `${this.branch.id}${this.branch.current ? '+current' : ''}`;
 		const compareWith = comparisons?.[id];
@@ -352,12 +348,8 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 	private async updateCompareWith(compareWith: BranchComparison | undefined) {
 		this._compareWith = compareWith;
 
-		let comparisons = this.view.container.storage.getWorkspace<BranchComparisons>(
-			WorkspaceStorageKeys.BranchComparisons,
-		);
+		let comparisons = Container.context.workspaceState.get<BranchComparisons>(WorkspaceState.BranchComparisons);
 		if (comparisons == null) {
-			if (compareWith == null) return;
-
 			comparisons = Object.create(null) as BranchComparisons;
 		}
 
@@ -366,11 +358,9 @@ export class CompareBranchNode extends ViewNode<BranchesView | CommitsView | Rep
 		if (compareWith != null) {
 			comparisons[id] = { ...compareWith };
 		} else {
-			if (comparisons[id] == null) return;
-
 			const { [id]: _, ...rest } = comparisons;
 			comparisons = rest;
 		}
-		await this.view.container.storage.storeWorkspace(WorkspaceStorageKeys.BranchComparisons, comparisons);
+		await Container.context.workspaceState.update(WorkspaceState.BranchComparisons, comparisons);
 	}
 }

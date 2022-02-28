@@ -1,8 +1,8 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { ViewFilesLayout, ViewsFilesConfig } from '../../configuration';
 import { GitUri } from '../../git/gitUri';
-import { HierarchicalItem } from '../../system/array';
-import { sortCompare } from '../../system/string';
+import { Arrays } from '../../system';
 import { FileHistoryView } from '../fileHistoryView';
 import { StashesView } from '../stashesView';
 import { ViewsWithCommits } from '../viewBase';
@@ -13,7 +13,7 @@ export interface FileNode extends ViewNode {
 	label?: string;
 	priority: number;
 	relativePath?: string;
-	root?: HierarchicalItem<FileNode>;
+	root?: Arrays.HierarchicalItem<FileNode>;
 }
 
 export class FolderNode extends ViewNode<ViewsWithCommits | FileHistoryView | StashesView> {
@@ -24,7 +24,7 @@ export class FolderNode extends ViewNode<ViewsWithCommits | FileHistoryView | St
 		parent: ViewNode,
 		public readonly repoPath: string,
 		public readonly folderName: string,
-		public readonly root: HierarchicalItem<FileNode>,
+		public readonly root: Arrays.HierarchicalItem<FileNode>,
 		private readonly containsWorkingFiles?: boolean,
 		public readonly relativePath?: string,
 	) {
@@ -77,7 +77,7 @@ export class FolderNode extends ViewNode<ViewsWithCommits | FileHistoryView | St
 			return (
 				(a instanceof FolderNode ? -1 : 1) - (b instanceof FolderNode ? -1 : 1) ||
 				a.priority - b.priority ||
-				sortCompare(a.label!, b.label!)
+				a.label!.localeCompare(b.label!, undefined, { numeric: true, sensitivity: 'base' })
 			);
 		});
 

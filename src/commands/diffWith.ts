@@ -1,12 +1,13 @@
-import { Range, TextDocumentShowOptions, Uri, ViewColumn } from 'vscode';
-import { Commands, CoreCommands, GlyphChars } from '../constants';
-import type { Container } from '../container';
-import { GitCommit, GitRevision } from '../git/models';
+'use strict';
+import * as paths from 'path';
+import { commands, Range, TextDocumentShowOptions, Uri, ViewColumn } from 'vscode';
+import { BuiltInCommands, GlyphChars } from '../constants';
+import { Container } from '../container';
+import { GitCommit, GitRevision } from '../git/git';
+import { GitUri } from '../git/gitUri';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command, executeCoreCommand } from '../system/command';
-import { basename } from '../system/path';
-import { Command } from './base';
+import { command, Command, Commands } from './common';
 
 export interface DiffWithCommandArgsRevision {
 	sha: string;
@@ -31,21 +32,17 @@ export class DiffWithCommand extends Command {
 		let args: DiffWithCommandArgs | GitCommit;
 		if (GitCommit.is(argsOrCommit)) {
 			const commit = argsOrCommit;
-			if (commit.file == null || commit.unresolvedPreviousSha == null) {
-				debugger;
-				throw new Error('Commit has no file');
-			}
 
 			if (commit.isUncommitted) {
 				args = {
 					repoPath: commit.repoPath,
 					lhs: {
 						sha: 'HEAD',
-						uri: commit.file.uri,
+						uri: commit.uri,
 					},
 					rhs: {
 						sha: '',
-						uri: commit.file.uri,
+						uri: commit.uri,
 					},
 					line: line,
 				};
@@ -53,12 +50,12 @@ export class DiffWithCommand extends Command {
 				args = {
 					repoPath: commit.repoPath,
 					lhs: {
-						sha: commit.unresolvedPreviousSha,
-						uri: commit.file.originalUri ?? commit.file.uri,
+						sha: commit.previousSha != null ? commit.previousSha : GitRevision.deletedOrMissing,
+						uri: commit.previousUri,
 					},
 					rhs: {
 						sha: commit.sha,
-						uri: commit.file.uri,
+						uri: commit.uri,
 					},
 					line: line,
 				};
@@ -70,7 +67,7 @@ export class DiffWithCommand extends Command {
 		return super.getMarkdownCommandArgsCore<DiffWithCommandArgs>(Commands.DiffWith, args);
 	}
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.DiffWith);
 	}
 
@@ -91,14 +88,8 @@ export class DiffWithCommand extends Command {
 			let rhsSha = args.rhs.sha;
 
 			[args.lhs.sha, args.rhs.sha] = await Promise.all([
-				await this.container.git.resolveReference(args.repoPath, args.lhs.sha, args.lhs.uri, {
-					// If the ref looks like a sha, don't wait too long, since it should work
-					timeout: GitRevision.isSha(args.lhs.sha) ? 100 : undefined,
-				}),
-				await this.container.git.resolveReference(args.repoPath, args.rhs.sha, args.rhs.uri, {
-					// If the ref looks like a sha, don't wait too long, since it should work
-					timeout: GitRevision.isSha(args.rhs.sha) ? 100 : undefined,
-				}),
+				await Container.git.resolveReference(args.repoPath, args.lhs.sha, args.lhs.uri, { timeout: 100 }),
+				await Container.git.resolveReference(args.repoPath, args.rhs.sha, args.rhs.uri, { timeout: 100 }),
 			]);
 
 			if (args.lhs.sha !== GitRevision.deletedOrMissing) {
@@ -107,9 +98,9 @@ export class DiffWithCommand extends Command {
 
 			if (args.rhs.sha && args.rhs.sha !== GitRevision.deletedOrMissing) {
 				// Ensure that the file still exists in this commit
-				const status = await this.container.git.getFileStatusForCommit(
+				const status = await Container.git.getFileStatusForCommit(
 					args.repoPath,
-					args.rhs.uri,
+					args.rhs.uri.fsPath,
 					args.rhs.sha,
 				);
 				if (status?.status === 'D') {
@@ -124,8 +115,8 @@ export class DiffWithCommand extends Command {
 			}
 
 			const [lhs, rhs] = await Promise.all([
-				this.container.git.getBestRevisionUri(args.repoPath, args.lhs.uri.fsPath, args.lhs.sha),
-				this.container.git.getBestRevisionUri(args.repoPath, args.rhs.uri.fsPath, args.rhs.sha),
+				Container.git.getVersionedUri(args.repoPath, args.lhs.uri.fsPath, args.lhs.sha),
+				Container.git.getVersionedUri(args.repoPath, args.rhs.uri.fsPath, args.rhs.sha),
 			]);
 
 			let rhsSuffix = GitRevision.shorten(rhsSha, { strings: { uncommitted: 'Working Tree' } });
@@ -152,10 +143,10 @@ export class DiffWithCommand extends Command {
 			}
 
 			if (args.lhs.title == null && (lhs != null || lhsSuffix.length !== 0)) {
-				args.lhs.title = `${basename(args.lhs.uri.fsPath)}${lhsSuffix ? ` (${lhsSuffix})` : ''}`;
+				args.lhs.title = `${paths.basename(args.lhs.uri.fsPath)}${lhsSuffix ? ` (${lhsSuffix})` : ''}`;
 			}
 			if (args.rhs.title == null) {
-				args.rhs.title = `${basename(args.rhs.uri.fsPath)}${rhsSuffix ? ` (${rhsSuffix})` : ''}`;
+				args.rhs.title = `${paths.basename(args.rhs.uri.fsPath)}${rhsSuffix ? ` (${rhsSuffix})` : ''}`;
 			}
 
 			const title =
@@ -175,12 +166,10 @@ export class DiffWithCommand extends Command {
 				args.showOptions.selection = new Range(args.line, 0, args.line, 0);
 			}
 
-			void (await executeCoreCommand(
-				CoreCommands.Diff,
-				lhs ??
-					this.container.git.getRevisionUri(GitRevision.deletedOrMissing, args.lhs.uri.fsPath, args.repoPath),
-				rhs ??
-					this.container.git.getRevisionUri(GitRevision.deletedOrMissing, args.rhs.uri.fsPath, args.repoPath),
+			void (await commands.executeCommand(
+				BuiltInCommands.Diff,
+				lhs ?? GitUri.toRevisionUri(GitRevision.deletedOrMissing, args.lhs.uri.fsPath, args.repoPath),
+				rhs ?? GitUri.toRevisionUri(GitRevision.deletedOrMissing, args.rhs.uri.fsPath, args.repoPath),
 				title,
 				args.showOptions,
 			));

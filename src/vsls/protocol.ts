@@ -1,4 +1,5 @@
-import { GitCommandOptions } from '../git/commandOptions';
+'use strict';
+import type { GitCommandOptions } from '../git/git';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export class RequestType<Request, Response> {
@@ -19,21 +20,20 @@ export const GitCommandRequestType = new RequestType<GitCommandRequest, GitComma
 
 export interface RepositoryProxy {
 	folderUri: string;
-	/** @deprecated */
-	path?: string;
+	path: string;
 	root: boolean;
 	closed: boolean;
 }
 
-export interface GetRepositoriesForUriRequest {
+export interface RepositoriesInFolderRequest {
 	folderUri: string;
 }
 
-export interface GetRepositoriesForUriResponse {
+export interface RepositoriesInFolderResponse {
 	repositories: RepositoryProxy[];
 }
 
-export const GetRepositoriesForUriRequestType = new RequestType<
-	GetRepositoriesForUriRequest,
-	GetRepositoriesForUriResponse
+export const RepositoriesInFolderRequestType = new RequestType<
+	RepositoriesInFolderRequest,
+	RepositoriesInFolderResponse
 >('repositories/inFolder');

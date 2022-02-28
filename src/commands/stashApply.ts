@@ -1,35 +1,32 @@
-import { GitActions } from '../commands/gitCommands.actions';
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { GitStashCommit, GitStashReference } from '../git/models';
-import { CommandQuickPickItem } from '../quickpicks/items/common';
-import { command } from '../system/command';
+'use strict';
+import { GitActions } from '../commands';
+import { GitStashCommit, GitStashReference } from '../git/git';
+import { CommandQuickPickItem } from '../quickpicks';
 import {
+	command,
 	Command,
 	CommandContext,
+	Commands,
 	isCommandContextViewNodeHasCommit,
 	isCommandContextViewNodeHasRepository,
-} from './base';
+} from './common';
 
 export interface StashApplyCommandArgs {
 	deleteAfter?: boolean;
 	repoPath?: string;
-	stashItem?: GitStashReference & { message: string | undefined };
+	stashItem?: GitStashReference & { message: string };
 
 	goBackCommand?: CommandQuickPickItem;
 }
 
 @command()
 export class StashApplyCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.StashApply);
 	}
 
-	protected override async preExecute(context: CommandContext, args?: StashApplyCommandArgs) {
+	protected override preExecute(context: CommandContext, args?: StashApplyCommandArgs) {
 		if (isCommandContextViewNodeHasCommit<GitStashCommit>(context)) {
-			if (context.node.commit.message == null) {
-				await context.node.commit.ensureFullDetails();
-			}
 			args = { ...args, stashItem: context.node.commit };
 		} else if (isCommandContextViewNodeHasRepository(context)) {
 			args = { ...args, repoPath: context.node.repo.path };

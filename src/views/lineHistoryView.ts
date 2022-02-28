@@ -1,9 +1,8 @@
+'use strict';
 import { commands, ConfigurationChangeEvent, Disposable } from 'vscode';
 import { configuration, LineHistoryViewConfig } from '../configuration';
-import { Commands, ContextKeys } from '../constants';
+import { ContextKeys, setContext } from '../constants';
 import { Container } from '../container';
-import { setContext } from '../context';
-import { executeCommand } from '../system/command';
 import { LineHistoryTrackerNode } from './nodes';
 import { ViewBase } from './viewBase';
 
@@ -12,8 +11,8 @@ const pinnedSuffix = ' (pinned)';
 export class LineHistoryView extends ViewBase<LineHistoryTrackerNode, LineHistoryViewConfig> {
 	protected readonly configKey = 'lineHistory';
 
-	constructor(container: Container) {
-		super('gitlens.views.lineHistory', 'Line History', container);
+	constructor() {
+		super('gitlens.views.lineHistory', 'Line History');
 
 		void setContext(ContextKeys.ViewsLineHistoryEditorFollowing, true);
 	}
@@ -22,17 +21,17 @@ export class LineHistoryView extends ViewBase<LineHistoryTrackerNode, LineHistor
 		return false;
 	}
 
-	protected getRoot() {
+	getRoot() {
 		return new LineHistoryTrackerNode(this);
 	}
 
 	protected registerCommands(): Disposable[] {
-		void this.container.viewCommands;
+		void Container.viewCommands;
 
 		return [
 			commands.registerCommand(
 				this.getQualifiedCommand('copy'),
-				() => executeCommand(Commands.ViewsCopy, this.selection),
+				() => commands.executeCommand('gitlens.views.copy', this.selection),
 				this,
 			),
 			commands.registerCommand(this.getQualifiedCommand('refresh'), () => this.refresh(true), this),

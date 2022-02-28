@@ -1,14 +1,19 @@
+'use strict';
 import { TextEditor, Uri } from 'vscode';
-import { GitActions } from '../commands/gitCommands.actions';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { GitActions } from '../commands';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { ReferencePicker } from '../quickpicks/referencePicker';
-import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { command } from '../system/command';
+import { ReferencePicker } from '../quickpicks';
 import { CompareResultsNode } from '../views/nodes';
-import { ActiveEditorCommand, CommandContext, getCommandUri, isCommandContextViewNodeHasRef } from './base';
+import {
+	ActiveEditorCommand,
+	command,
+	CommandContext,
+	Commands,
+	getCommandUri,
+	getRepoPathOrActiveOrPrompt,
+	isCommandContextViewNodeHasRef,
+} from './common';
 
 export interface OpenDirectoryCompareCommandArgs {
 	ref1?: string;
@@ -17,7 +22,7 @@ export interface OpenDirectoryCompareCommandArgs {
 
 @command()
 export class OpenDirectoryCompareCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([
 			Commands.DiffDirectory,
 			Commands.DiffDirectoryWithHead,
@@ -58,9 +63,7 @@ export class OpenDirectoryCompareCommand extends ActiveEditorCommand {
 		args = { ...args };
 
 		try {
-			const repoPath = (
-				await RepositoryPicker.getBestRepositoryOrShow(uri, editor, 'Directory Compare Working Tree With')
-			)?.path;
+			const repoPath = await getRepoPathOrActiveOrPrompt(uri, editor, 'Directory Compare Working Tree With');
 			if (!repoPath) return;
 
 			if (!args.ref1) {

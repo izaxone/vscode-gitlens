@@ -1,14 +1,12 @@
+'use strict';
 import { commands } from 'vscode';
-import { Commands } from '../constants';
-import type { Container } from '../container';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { command } from '../system/command';
-import { Command, getLastCommand } from './base';
+import { command, Command, Commands, getLastCommand } from './common';
 
 @command()
 export class ShowLastQuickPickCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.ShowLastQuickPick);
 	}
 

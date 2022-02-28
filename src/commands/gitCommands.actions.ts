@@ -1,44 +1,41 @@
 import { env, Range, TextDocumentShowOptions, Uri, window } from 'vscode';
-import type {
+import {
 	BrowseRepoAtRevisionCommandArgs,
+	Commands,
 	DiffWithCommandArgs,
 	DiffWithWorkingCommandArgs,
+	executeCommand,
+	executeEditorCommand,
+	findOrOpenEditor,
+	findOrOpenEditors,
 	GitCommandsCommandArgs,
 	OpenWorkingFileCommandArgs,
 } from '../commands';
-import { FileAnnotationType } from '../configuration';
-import { Commands, CoreCommands } from '../constants';
+import { configuration, FileAnnotationType } from '../configuration';
 import { Container } from '../container';
-import { GitUri } from '../git/gitUri';
 import {
 	GitBranchReference,
-	GitCommit,
 	GitContributor,
 	GitFile,
+	GitLogCommit,
 	GitReference,
 	GitRemote,
 	GitRevision,
 	GitRevisionReference,
 	GitStashReference,
 	GitTagReference,
-	GitWorktree,
 	Repository,
-} from '../git/models';
-import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { ensure } from '../system/array';
-import { executeCommand, executeCoreCommand, executeEditorCommand } from '../system/command';
-import { findOrOpenEditor, findOrOpenEditors, openWorkspace, OpenWorkspaceLocation } from '../system/utils';
-import { ViewsWithRepositoryFolders } from '../views/viewBase';
+} from '../git/git';
+import { GitUri } from '../git/gitUri';
+import { RepositoryPicker } from '../quickpicks';
 import { ResetGitCommandArgs } from './git/reset';
 
 export async function executeGitCommand(args: GitCommandsCommandArgs): Promise<void> {
 	void (await executeCommand<GitCommandsCommandArgs>(Commands.GitCommands, args));
 }
 
-function ensureRepo(repo: string | Repository): Repository {
-	const repository = typeof repo === 'string' ? Container.instance.git.getRepository(repo) : repo;
-	if (repository == null) throw new Error('Repository not found');
-	return repository;
+async function ensureRepo(repo: string | Repository): Promise<Repository> {
+	return typeof repo === 'string' ? (await Container.git.getRepository(repo))! : repo;
 }
 
 export namespace GitActions {
@@ -153,10 +150,21 @@ export namespace GitActions {
 				expand?: boolean | number;
 			},
 		) {
-			const view = branch.remote ? Container.instance.remotesView : Container.instance.branchesView;
-			const node = view.canReveal
-				? await view.revealBranch(branch, options)
-				: await Container.instance.repositoriesView.revealBranch(branch, options);
+			if (
+				!configuration.get(`views.${branch.remote ? 'remotes' : 'branches'}.reveal` as const) ||
+				(Container.repositoriesView.visible &&
+					!(branch.remote ? Container.remotesView.visible : Container.branchesView.visible))
+			) {
+				return Container.repositoriesView.revealBranch(branch, options);
+			}
+
+			let node;
+			if (branch.remote) {
+				node = await Container.remotesView.revealBranch(branch, options);
+			} else {
+				node = await Container.branchesView.revealBranch(branch, options);
+			}
+
 			return node;
 		}
 	}
@@ -169,58 +177,49 @@ export namespace GitActions {
 		) {
 			// Open the working file to ensure undo will work
 			void (await GitActions.Commit.openFile(file, ref1, { preserveFocus: true, preview: false }));
-			void (await Container.instance.git.applyChangesToWorkingFile(
+			void (await Container.git.applyChangesToWorkingFile(
 				GitUri.fromFile(file, ref1.repoPath, ref1.ref),
 				ref1.ref,
 				ref2?.ref,
 			));
 		}
 
-		export async function copyIdToClipboard(ref: { repoPath: string; ref: string } | GitCommit) {
+		export async function copyIdToClipboard(ref: { repoPath: string; ref: string } | GitLogCommit) {
 			void (await env.clipboard.writeText(ref.ref));
 		}
 
-		export async function copyMessageToClipboard(
-			ref: { repoPath: string; ref: string } | GitCommit,
-		): Promise<void> {
-			let commit;
-			if (GitCommit.is(ref)) {
-				commit = ref;
-				if (commit.message == null) {
-					await commit.ensureFullDetails();
-				}
+		export async function copyMessageToClipboard(ref: { repoPath: string; ref: string } | GitLogCommit) {
+			let message;
+			if (GitLogCommit.is(ref)) {
+				message = ref.message;
 			} else {
-				commit = await Container.instance.git.getCommit(ref.repoPath, ref.ref);
+				const commit = await Container.git.getCommit(ref.repoPath, ref.ref);
 				if (commit == null) return;
+
+				message = commit.message;
 			}
 
-			const message = commit.message ?? commit.summary;
 			void (await env.clipboard.writeText(message));
 		}
 
-		export async function openAllChanges(commit: GitCommit, options?: TextDocumentShowOptions): Promise<void>;
+		export async function openAllChanges(commit: GitLogCommit, options?: TextDocumentShowOptions): Promise<void>;
 		export async function openAllChanges(
 			files: GitFile[],
 			refs: { repoPath: string; ref1: string; ref2: string },
 			options?: TextDocumentShowOptions,
 		): Promise<void>;
 		export async function openAllChanges(
-			commitOrFiles: GitCommit | GitFile[],
+			commitOrFiles: GitLogCommit | GitFile[],
 			refsOrOptions: { repoPath: string; ref1: string; ref2: string } | TextDocumentShowOptions | undefined,
 			options?: TextDocumentShowOptions,
 		) {
 			let files;
 			let refs;
-			if (GitCommit.is(commitOrFiles)) {
-				if (commitOrFiles.files == null) {
-					await commitOrFiles.ensureFullDetails();
-				}
-
-				files = commitOrFiles.files ?? [];
+			if (GitLogCommit.is(commitOrFiles)) {
+				files = commitOrFiles.files;
 				refs = {
 					repoPath: commitOrFiles.repoPath,
-					// Don't need to worry about verifying the previous sha, as the DiffWith command will
-					ref1: commitOrFiles.unresolvedPreviousSha,
+					ref1: commitOrFiles.previousSha != null ? commitOrFiles.previousSha : GitRevision.deletedOrMissing,
 					ref2: commitOrFiles.sha,
 				};
 
@@ -246,22 +245,18 @@ export namespace GitActions {
 			}
 		}
 
-		export async function openAllChangesWithDiffTool(commit: GitCommit): Promise<void>;
+		export async function openAllChangesWithDiffTool(commit: GitLogCommit): Promise<void>;
 		export async function openAllChangesWithDiffTool(
 			files: GitFile[],
 			ref: { repoPath: string; ref: string },
 		): Promise<void>;
 		export async function openAllChangesWithDiffTool(
-			commitOrFiles: GitCommit | GitFile[],
+			commitOrFiles: GitLogCommit | GitFile[],
 			ref?: { repoPath: string; ref: string },
 		) {
 			let files;
-			if (GitCommit.is(commitOrFiles)) {
-				if (commitOrFiles.files == null) {
-					await commitOrFiles.ensureFullDetails();
-				}
-
-				files = commitOrFiles.files ?? [];
+			if (GitLogCommit.is(commitOrFiles)) {
+				files = commitOrFiles.files;
 				ref = {
 					repoPath: commitOrFiles.repoPath,
 					ref: commitOrFiles.sha,
@@ -285,7 +280,7 @@ export namespace GitActions {
 		}
 
 		export async function openAllChangesWithWorking(
-			commit: GitCommit,
+			commit: GitLogCommit,
 			options?: TextDocumentShowOptions,
 		): Promise<void>;
 		export async function openAllChangesWithWorking(
@@ -294,18 +289,14 @@ export namespace GitActions {
 			options?: TextDocumentShowOptions,
 		): Promise<void>;
 		export async function openAllChangesWithWorking(
-			commitOrFiles: GitCommit | GitFile[],
+			commitOrFiles: GitLogCommit | GitFile[],
 			refOrOptions: { repoPath: string; ref: string } | TextDocumentShowOptions | undefined,
 			options?: TextDocumentShowOptions,
 		) {
 			let files;
 			let ref;
-			if (GitCommit.is(commitOrFiles)) {
-				if (commitOrFiles.files == null) {
-					await commitOrFiles.ensureFullDetails();
-				}
-
-				files = commitOrFiles.files ?? [];
+			if (GitLogCommit.is(commitOrFiles)) {
+				files = commitOrFiles.files;
 				ref = {
 					repoPath: commitOrFiles.repoPath,
 					ref: commitOrFiles.sha,
@@ -335,7 +326,7 @@ export namespace GitActions {
 
 		export async function openChanges(
 			file: string | GitFile,
-			commit: GitCommit,
+			commit: GitLogCommit,
 			options?: TextDocumentShowOptions,
 		): Promise<void>;
 		export async function openChanges(
@@ -345,13 +336,13 @@ export namespace GitActions {
 		): Promise<void>;
 		export async function openChanges(
 			file: string | GitFile,
-			commitOrRefs: GitCommit | { repoPath: string; ref1: string; ref2: string },
+			commitOrRefs: GitLogCommit | { repoPath: string; ref1: string; ref2: string },
 			options?: TextDocumentShowOptions,
 		) {
 			if (typeof file === 'string') {
-				if (!GitCommit.is(commitOrRefs)) throw new Error('Invalid arguments');
+				if (!GitLogCommit.is(commitOrRefs)) throw new Error('Invalid arguments');
 
-				const f = await commitOrRefs.findFile(file);
+				const f = commitOrRefs.findFile(file);
 				if (f == null) throw new Error('Invalid arguments');
 
 				file = f;
@@ -359,11 +350,11 @@ export namespace GitActions {
 
 			if (file.status === 'A') return;
 
-			const refs = GitCommit.is(commitOrRefs)
+			const refs = GitLogCommit.is(commitOrRefs)
 				? {
 						repoPath: commitOrRefs.repoPath,
-						// Don't need to worry about verifying the previous sha, as the DiffWith command will
-						ref1: commitOrRefs.unresolvedPreviousSha,
+						ref1:
+							commitOrRefs.previousSha != null ? commitOrRefs.previousSha : GitRevision.deletedOrMissing,
 						ref2: commitOrRefs.sha,
 				  }
 				: commitOrRefs;
@@ -386,7 +377,7 @@ export namespace GitActions {
 
 		export function openChangesWithDiffTool(
 			file: string | GitFile,
-			commit: GitCommit,
+			commit: GitLogCommit,
 			tool?: string,
 		): Promise<void>;
 		export function openChangesWithDiffTool(
@@ -396,19 +387,19 @@ export namespace GitActions {
 		): Promise<void>;
 		export async function openChangesWithDiffTool(
 			file: string | GitFile,
-			commitOrRef: GitCommit | { repoPath: string; ref: string },
+			commitOrRef: GitLogCommit | { repoPath: string; ref: string },
 			tool?: string,
 		) {
 			if (typeof file === 'string') {
-				if (!GitCommit.is(commitOrRef)) throw new Error('Invalid arguments');
+				if (!GitLogCommit.is(commitOrRef)) throw new Error('Invalid arguments');
 
-				const f = await commitOrRef.findFile(file);
+				const f = commitOrRef.findFile(file);
 				if (f == null) throw new Error('Invalid arguments');
 
 				file = f;
 			}
 
-			return Container.instance.git.openDiffTool(
+			return Container.git.openDiffTool(
 				commitOrRef.repoPath,
 				GitUri.fromFile(file, file.repoPath ?? commitOrRef.repoPath),
 				{
@@ -422,7 +413,7 @@ export namespace GitActions {
 
 		export async function openChangesWithWorking(
 			file: string | GitFile,
-			commit: GitCommit,
+			commit: GitLogCommit,
 			options?: TextDocumentShowOptions,
 		): Promise<void>;
 		export async function openChangesWithWorking(
@@ -432,13 +423,13 @@ export namespace GitActions {
 		): Promise<void>;
 		export async function openChangesWithWorking(
 			file: string | GitFile,
-			commitOrRef: GitCommit | { repoPath: string; ref: string },
+			commitOrRef: GitLogCommit | { repoPath: string; ref: string },
 			options?: TextDocumentShowOptions,
 		) {
 			if (typeof file === 'string') {
-				if (!GitCommit.is(commitOrRef)) throw new Error('Invalid arguments');
+				if (!GitLogCommit.is(commitOrRef)) throw new Error('Invalid arguments');
 
-				const f = await commitOrRef.findFile(file);
+				const f = commitOrRef.files.find(f => f.fileName === file);
 				if (f == null) throw new Error('Invalid arguments');
 
 				file = f;
@@ -447,7 +438,7 @@ export namespace GitActions {
 			if (file.status === 'D') return;
 
 			let ref;
-			if (GitCommit.is(commitOrRef)) {
+			if (GitLogCommit.is(commitOrRef)) {
 				ref = {
 					repoPath: commitOrRef.repoPath,
 					ref: commitOrRef.sha,
@@ -470,17 +461,17 @@ export namespace GitActions {
 			ref2: string | undefined,
 			tool?: string,
 		): Promise<void> {
-			return Container.instance.git.openDirectoryCompare(repoPath, ref, ref2, tool);
+			return Container.git.openDirectoryCompare(repoPath, ref, ref2, tool);
 		}
 
 		export async function openDirectoryCompareWithPrevious(
-			ref: { repoPath: string; ref: string } | GitCommit,
+			ref: { repoPath: string; ref: string } | GitLogCommit,
 		): Promise<void> {
 			return openDirectoryCompare(ref.repoPath, ref.ref, `${ref.ref}^`);
 		}
 
 		export async function openDirectoryCompareWithWorking(
-			ref: { repoPath: string; ref: string } | GitCommit,
+			ref: { repoPath: string; ref: string } | GitLogCommit,
 		): Promise<void> {
 			return openDirectoryCompare(ref.repoPath, ref.ref, undefined);
 		}
@@ -519,28 +510,28 @@ export namespace GitActions {
 		): Promise<void>;
 		export async function openFileAtRevision(
 			file: string | GitFile,
-			commit: GitCommit,
+			commit: GitLogCommit,
 			options?: TextDocumentShowOptions & { annotationType?: FileAnnotationType; line?: number },
 		): Promise<void>;
 		export async function openFileAtRevision(
 			fileOrRevisionUri: string | GitFile | Uri,
-			commitOrOptions?: GitCommit | TextDocumentShowOptions,
+			commitOrOptions?: GitLogCommit | TextDocumentShowOptions,
 			options?: TextDocumentShowOptions & { annotationType?: FileAnnotationType; line?: number },
 		): Promise<void> {
 			let uri;
 			if (fileOrRevisionUri instanceof Uri) {
-				if (GitCommit.is(commitOrOptions)) throw new Error('Invalid arguments');
+				if (GitLogCommit.is(commitOrOptions)) throw new Error('Invalid arguments');
 
 				uri = fileOrRevisionUri;
 				options = commitOrOptions;
 			} else {
-				if (!GitCommit.is(commitOrOptions)) throw new Error('Invalid arguments');
+				if (!GitLogCommit.is(commitOrOptions)) throw new Error('Invalid arguments');
 
 				const commit = commitOrOptions;
 
 				let file;
 				if (typeof fileOrRevisionUri === 'string') {
-					const f = await commit.findFile(fileOrRevisionUri);
+					const f = commit.findFile(fileOrRevisionUri);
 					if (f == null) throw new Error('Invalid arguments');
 
 					file = f;
@@ -548,8 +539,8 @@ export namespace GitActions {
 					file = fileOrRevisionUri;
 				}
 
-				uri = Container.instance.git.getRevisionUri(
-					file.status === 'D' ? (await commit.getPreviousSha()) ?? GitRevision.deletedOrMissing : commit.sha,
+				uri = GitUri.toRevisionUri(
+					file.status === 'D' ? commit.previousFileSha : commit.sha,
 					file,
 					commit.repoPath,
 				);
@@ -567,26 +558,20 @@ export namespace GitActions {
 
 			const editor = await findOrOpenEditor(uri, opts);
 			if (annotationType != null && editor != null) {
-				void (await Container.instance.fileAnnotations.show(editor, annotationType, {
-					selection: { line: line },
-				}));
+				void (await Container.fileAnnotations.show(editor, annotationType, { selection: { line: line } }));
 			}
 		}
 
-		export async function openFiles(commit: GitCommit): Promise<void>;
+		export async function openFiles(commit: GitLogCommit): Promise<void>;
 		export async function openFiles(files: GitFile[], repoPath: string, ref: string): Promise<void>;
 		export async function openFiles(
-			commitOrFiles: GitCommit | GitFile[],
+			commitOrFiles: GitLogCommit | GitFile[],
 			repoPath?: string,
 			ref?: string,
 		): Promise<void> {
 			let files;
-			if (GitCommit.is(commitOrFiles)) {
-				if (commitOrFiles.files == null) {
-					await commitOrFiles.ensureFullDetails();
-				}
-
-				files = commitOrFiles.files ?? [];
+			if (GitLogCommit.is(commitOrFiles)) {
+				files = commitOrFiles.files;
 				repoPath = commitOrFiles.repoPath;
 				ref = commitOrFiles.sha;
 			} else {
@@ -604,15 +589,13 @@ export namespace GitActions {
 
 			const uris: Uri[] = (
 				await Promise.all(
-					files.map(file =>
-						Container.instance.git.getWorkingUri(repoPath!, GitUri.fromFile(file, repoPath!, ref)),
-					),
+					files.map(file => Container.git.getWorkingUri(repoPath!, GitUri.fromFile(file, repoPath!, ref))),
 				)
 			).filter(<T>(u?: T): u is T => Boolean(u));
 			findOrOpenEditors(uris);
 		}
 
-		export async function openFilesAtRevision(commit: GitCommit): Promise<void>;
+		export async function openFilesAtRevision(commit: GitLogCommit): Promise<void>;
 		export async function openFilesAtRevision(
 			files: GitFile[],
 			repoPath: string,
@@ -620,21 +603,17 @@ export namespace GitActions {
 			ref2: string,
 		): Promise<void>;
 		export async function openFilesAtRevision(
-			commitOrFiles: GitCommit | GitFile[],
+			commitOrFiles: GitLogCommit | GitFile[],
 			repoPath?: string,
 			ref1?: string,
 			ref2?: string,
 		): Promise<void> {
 			let files;
-			if (GitCommit.is(commitOrFiles)) {
-				if (commitOrFiles.files == null) {
-					await commitOrFiles.ensureFullDetails();
-				}
-
-				files = commitOrFiles.files ?? [];
+			if (GitLogCommit.is(commitOrFiles)) {
+				files = commitOrFiles.files;
 				repoPath = commitOrFiles.repoPath;
 				ref1 = commitOrFiles.sha;
-				ref2 = await commitOrFiles.getPreviousSha();
+				ref2 = commitOrFiles.previousFileSha;
 			} else {
 				files = commitOrFiles;
 			}
@@ -649,15 +628,13 @@ export namespace GitActions {
 			}
 
 			findOrOpenEditors(
-				files.map(file =>
-					Container.instance.git.getRevisionUri(file.status === 'D' ? ref2! : ref1!, file, repoPath!),
-				),
+				files.map(file => GitUri.toRevisionUri(file.status === 'D' ? ref2! : ref1!, file, repoPath!)),
 			);
 		}
 
 		export async function restoreFile(file: string | GitFile, ref: GitRevisionReference) {
-			void (await Container.instance.git.checkout(ref.repoPath, ref.ref, {
-				fileName: typeof file === 'string' ? file : file.path,
+			void (await Container.git.checkout(ref.repoPath, ref.ref, {
+				fileName: typeof file === 'string' ? file : file.fileName,
 			}));
 		}
 
@@ -669,20 +646,23 @@ export namespace GitActions {
 				expand?: boolean | number;
 			},
 		) {
-			const views = [
-				Container.instance.commitsView,
-				Container.instance.branchesView,
-				Container.instance.remotesView,
-			];
+			if (
+				!configuration.get('views.commits.reveal') ||
+				(Container.repositoriesView.visible && !Container.commitsView.visible)
+			) {
+				return Container.repositoriesView.revealCommit(commit, options);
+			}
 
 			// TODO@eamodio stop duplicate notifications
 
-			for (const view of views) {
-				const node = view.canReveal
-					? await view.revealCommit(commit, options)
-					: await Container.instance.repositoriesView.revealCommit(commit, options);
-				if (node != null) return node;
-			}
+			let node = await Container.commitsView.revealCommit(commit, options);
+			if (node != null) return node;
+
+			node = await Container.branchesView.revealCommit(commit, options);
+			if (node != null) return node;
+
+			node = await Container.remotesView.revealCommit(commit, options);
+			if (node != null) return node;
 
 			return undefined;
 		}
@@ -695,19 +675,48 @@ export namespace GitActions {
 				state: { repo: repo, contributors: contributors },
 			});
 		}
+	}
+
+	export namespace Tag {
+		export function create(repo?: string | Repository, ref?: GitReference, name?: string) {
+			return executeGitCommand({
+				command: 'tag',
+				state: {
+					subcommand: 'create',
+					repo: repo,
+					reference: ref,
+					name: name,
+				},
+			});
+		}
+
+		export function remove(repo?: string | Repository, refs?: GitTagReference | GitTagReference[]) {
+			return executeGitCommand({
+				command: 'tag',
+				state: {
+					subcommand: 'delete',
+					repo: repo,
+					references: refs,
+				},
+			});
+		}
 
 		export async function reveal(
-			contributor: GitContributor,
+			tag: GitTagReference,
 			options?: {
 				select?: boolean;
 				focus?: boolean;
 				expand?: boolean | number;
 			},
 		) {
-			const view = Container.instance.contributorsView;
-			const node = view.canReveal
-				? await view.revealContributor(contributor, options)
-				: await Container.instance.repositoriesView.revealContributor(contributor, options);
+			if (
+				!configuration.get('views.tags.reveal') ||
+				(Container.repositoriesView.visible && !Container.tagsView.visible)
+			) {
+				return Container.repositoriesView.revealTag(tag, options);
+			}
+
+			const node = await Container.tagsView.revealTag(tag, options);
 			return node;
 		}
 	}
@@ -715,7 +724,7 @@ export namespace GitActions {
 	export namespace Remote {
 		export async function add(repo?: string | Repository) {
 			if (repo == null) {
-				repo = Container.instance.git.highlander;
+				repo = Container.git.getHighlanderRepoPath();
 
 				if (repo == null) {
 					const pick = await RepositoryPicker.show(undefined, 'Choose a repository to add a remote to');
@@ -740,8 +749,8 @@ export namespace GitActions {
 			});
 			if (url == null || url.length === 0) return undefined;
 
-			repo = ensureRepo(repo);
-			void (await Container.instance.git.addRemote(repo.path, name, url));
+			repo = await ensureRepo(repo);
+			void (await Container.git.addRemote(repo.path, name, url));
 			void (await repo.fetch({ remote: name }));
 
 			return name;
@@ -749,7 +758,7 @@ export namespace GitActions {
 
 		export async function fetch(repo: string | Repository, remote: string) {
 			if (typeof repo === 'string') {
-				const r = Container.instance.git.getRepository(repo);
+				const r = await Container.git.getRepository(repo);
 				if (r == null) return;
 
 				repo = r;
@@ -759,7 +768,7 @@ export namespace GitActions {
 		}
 
 		export async function prune(repo: string | Repository, remote: string) {
-			void (await Container.instance.git.pruneRemote(typeof repo === 'string' ? repo : repo.path, remote));
+			void (await Container.git.pruneRemote(typeof repo === 'string' ? repo : repo.path, remote));
 		}
 
 		export async function reveal(
@@ -770,27 +779,14 @@ export namespace GitActions {
 				expand?: boolean | number;
 			},
 		) {
-			const view = Container.instance.remotesView;
-			const node = view.canReveal
-				? await view.revealRemote(remote, options)
-				: await Container.instance.repositoriesView.revealRemote(remote, options);
-			return node;
-		}
-	}
+			// if (
+			// 	configuration.get('views.repositories.enabled') &&
+			// 	(Container.repositoriesView.visible || !Container.remotesView.visible)
+			// ) {
+			// 	return Container.repositoriesView.revealRemote(remote, options);
+			// }
 
-	export namespace Repository {
-		export async function reveal(
-			repoPath: string,
-			view?: ViewsWithRepositoryFolders,
-			options?: {
-				select?: boolean;
-				focus?: boolean;
-				expand?: boolean | number;
-			},
-		) {
-			const node = view?.canReveal
-				? await view.revealRepository(repoPath, options)
-				: await Container.instance.repositoriesView.revealRepository(repoPath, options);
+			const node = await Container.remotesView.revealRemote(remote, options);
 			return node;
 		}
 	}
@@ -838,86 +834,15 @@ export namespace GitActions {
 				expand?: boolean | number;
 			},
 		) {
-			const view = Container.instance.stashesView;
-			const node = view.canReveal
-				? await view.revealStash(stash, options)
-				: await Container.instance.repositoriesView.revealStash(stash, options);
+			if (
+				!configuration.get('views.stashes.reveal') ||
+				(Container.repositoriesView.visible && !Container.stashesView.visible)
+			) {
+				return Container.repositoriesView.revealStash(stash, options);
+			}
+
+			const node = await Container.stashesView.revealStash(stash, options);
 			return node;
-		}
-	}
-
-	export namespace Tag {
-		export function create(repo?: string | Repository, ref?: GitReference, name?: string) {
-			return executeGitCommand({
-				command: 'tag',
-				state: {
-					subcommand: 'create',
-					repo: repo,
-					reference: ref,
-					name: name,
-				},
-			});
-		}
-
-		export function remove(repo?: string | Repository, refs?: GitTagReference | GitTagReference[]) {
-			return executeGitCommand({
-				command: 'tag',
-				state: {
-					subcommand: 'delete',
-					repo: repo,
-					references: refs,
-				},
-			});
-		}
-
-		export async function reveal(
-			tag: GitTagReference,
-			options?: {
-				select?: boolean;
-				focus?: boolean;
-				expand?: boolean | number;
-			},
-		) {
-			const view = Container.instance.tagsView;
-			const node = view.canReveal
-				? await view.revealTag(tag, options)
-				: await Container.instance.repositoriesView.revealTag(tag, options);
-			return node;
-		}
-	}
-
-	export namespace Worktree {
-		export function create(repo?: string | Repository, uri?: Uri, ref?: GitReference) {
-			return executeGitCommand({
-				command: 'worktree',
-				state: { subcommand: 'create', repo: repo, uri: uri, reference: ref },
-			});
-		}
-
-		export function open(worktree: GitWorktree, options?: { location?: OpenWorkspaceLocation }) {
-			return openWorkspace(worktree.uri, options);
-		}
-
-		export function remove(repo?: string | Repository, uri?: Uri) {
-			return executeGitCommand({
-				command: 'worktree',
-				state: { subcommand: 'delete', repo: repo, uris: ensure(uri) },
-			});
-		}
-
-		export async function reveal(
-			worktree: GitWorktree,
-			options?: { select?: boolean; focus?: boolean; expand?: boolean | number },
-		) {
-			const view = Container.instance.worktreesView;
-			const node = view.canReveal
-				? await view.revealWorktree(worktree, options)
-				: await Container.instance.repositoriesView.revealWorktree(worktree, options);
-			return node;
-		}
-
-		export async function revealInFileExplorer(worktree: GitWorktree) {
-			void (await executeCoreCommand(CoreCommands.RevealInFileExplorer, worktree.uri));
 		}
 	}
 }

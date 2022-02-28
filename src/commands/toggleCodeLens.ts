@@ -1,15 +1,14 @@
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { command } from '../system/command';
-import { Command } from './base';
+'use strict';
+import { Container } from '../container';
+import { command, Command, Commands } from './common';
 
 @command()
 export class ToggleCodeLensCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.ToggleCodeLens);
 	}
 
 	execute() {
-		return this.container.codeLens.toggleCodeLens();
+		return Container.codeLens.toggleCodeLens();
 	}
 }

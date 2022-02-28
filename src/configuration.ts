@@ -1,3 +1,4 @@
+'use strict';
 export * from './config';
 
 import {
@@ -9,8 +10,8 @@ import {
 	ExtensionContext,
 	workspace,
 } from 'vscode';
-import type { Config } from './config';
-import { areEqual } from './system/object';
+import { Config } from './config';
+import { Objects } from './system';
 
 const configPrefix = 'gitlens';
 
@@ -286,7 +287,7 @@ export class Configuration {
 
 		return configuration.update(
 			section,
-			areEqual(value, inspect.defaultValue) ? undefined : value,
+			Objects.areEqual(value, inspect.defaultValue) ? undefined : value,
 			ConfigurationTarget.Global,
 		);
 	}

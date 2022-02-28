@@ -1,8 +1,8 @@
+'use strict';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
+import { Repository } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { Repository } from '../../git/models';
-import { gate } from '../../system/decorators/gate';
-import { debug } from '../../system/decorators/log';
+import { debug, gate } from '../../system';
 import { RemotesView } from '../remotesView';
 import { RepositoriesView } from '../repositoriesView';
 import { MessageNode } from './common';

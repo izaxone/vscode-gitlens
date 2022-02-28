@@ -1,23 +1,25 @@
+'use strict';
 import { Range, TextEditor, Uri, window } from 'vscode';
 import { UriComparer } from '../comparers';
 import { BranchSorting, TagSorting } from '../configuration';
-import { Commands, GlyphChars } from '../constants';
-import type { Container } from '../container';
+import { GlyphChars } from '../constants';
+import { Container } from '../container';
+import { GitBranch, GitRevision, RemoteResourceType } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitBranch, GitRevision } from '../git/models';
-import { RemoteResourceType } from '../git/remotes/provider';
 import { Logger } from '../logger';
-import { ReferencePicker } from '../quickpicks/referencePicker';
-import { command, executeCommand } from '../system/command';
-import { pad, splitSingle } from '../system/string';
+import { ReferencePicker } from '../quickpicks';
+import { Strings } from '../system';
 import { StatusFileNode } from '../views/nodes';
 import {
 	ActiveEditorCommand,
+	command,
 	CommandContext,
+	Commands,
+	executeCommand,
 	getCommandUri,
 	isCommandContextViewNodeHasBranch,
 	isCommandContextViewNodeHasCommit,
-} from './base';
+} from './common';
 import { OpenOnRemoteCommandArgs } from './openOnRemote';
 
 export interface OpenFileOnRemoteCommandArgs {
@@ -30,7 +32,7 @@ export interface OpenFileOnRemoteCommandArgs {
 
 @command()
 export class OpenFileOnRemoteCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([
 			Commands.OpenFileOnRemote,
 			Commands.Deprecated_OpenFileInRemote,
@@ -81,7 +83,7 @@ export class OpenFileOnRemoteCommand extends ActiveEditorCommand {
 					const gitUri = await GitUri.fromUri(uri);
 					if (gitUri.repoPath) {
 						if (gitUri.sha == null) {
-							const commit = await this.container.git.getCommitForFile(gitUri.repoPath, gitUri, {
+							const commit = await Container.git.getCommitForFile(gitUri.repoPath, gitUri.fsPath, {
 								firstIfNotFound: true,
 							});
 
@@ -113,7 +115,7 @@ export class OpenFileOnRemoteCommand extends ActiveEditorCommand {
 		args = { range: true, ...args };
 
 		try {
-			let remotes = await this.container.git.getRemotesWithProviders(gitUri.repoPath);
+			let remotes = await Container.git.getRemotes(gitUri.repoPath);
 			const range =
 				args.range && editor != null && UriComparer.equals(editor.document.uri, uri)
 					? new Range(
@@ -126,7 +128,7 @@ export class OpenFileOnRemoteCommand extends ActiveEditorCommand {
 			let sha = args.sha ?? gitUri.sha;
 
 			if (args.branchOrTag == null && sha != null && !GitRevision.isSha(sha) && remotes.length !== 0) {
-				const [remoteName, branchName] = splitSingle(sha, '/');
+				const [remoteName, branchName] = Strings.splitSingle(sha, '/');
 				if (branchName != null) {
 					const remote = remotes.find(r => r.name === remoteName);
 					if (remote != null) {
@@ -141,15 +143,15 @@ export class OpenFileOnRemoteCommand extends ActiveEditorCommand {
 			if ((args.sha == null && args.branchOrTag == null) || args.pickBranchOrTag) {
 				let branch;
 				if (!args.pickBranchOrTag) {
-					branch = await this.container.git.getBranch(gitUri.repoPath);
+					branch = await Container.git.getBranch(gitUri.repoPath);
 				}
 
 				if (branch?.upstream == null) {
 					const pick = await ReferencePicker.show(
 						gitUri.repoPath,
 						args.clipboard
-							? `Copy Remote File Url From${pad(GlyphChars.Dot, 2, 2)}${gitUri.relativePath}`
-							: `Open File on Remote From${pad(GlyphChars.Dot, 2, 2)}${gitUri.relativePath}`,
+							? `Copy Remote File Url From${Strings.pad(GlyphChars.Dot, 2, 2)}${gitUri.relativePath}`
+							: `Open File on Remote From${Strings.pad(GlyphChars.Dot, 2, 2)}${gitUri.relativePath}`,
 						`Choose a branch or tag to ${args.clipboard ? 'copy' : 'open'} the file revision from`,
 						{
 							allowEnteringRefs: true,

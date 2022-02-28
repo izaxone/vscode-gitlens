@@ -1,21 +1,19 @@
+'use strict';
 import { MarkdownString, ThemeColor, ThemeIcon, TreeItem, TreeItemCollapsibleState, Uri, window } from 'vscode';
 import { ViewBranchesLayout, ViewShowBranchComparison } from '../../configuration';
 import { Colors, GlyphChars } from '../../constants';
 import { Container } from '../../container';
-import { GitUri } from '../../git/gitUri';
 import {
+	BranchDateFormatting,
 	GitBranch,
 	GitBranchReference,
 	GitLog,
 	GitRemote,
 	GitRemoteType,
-	GitUser,
 	PullRequestState,
-} from '../../git/models';
-import { gate } from '../../system/decorators/gate';
-import { debug, log } from '../../system/decorators/log';
-import { map } from '../../system/iterable';
-import { pad } from '../../system/string';
+} from '../../git/git';
+import { GitUri } from '../../git/gitUri';
+import { debug, gate, Iterables, log, Strings } from '../../system';
 import { BranchesView } from '../branchesView';
 import { CommitsView } from '../commitsView';
 import { RemotesView } from '../remotesView';
@@ -49,7 +47,7 @@ export class BranchNode
 		showCurrent: boolean;
 		showStatus: boolean;
 		showTracking: boolean;
-		authors?: GitUser[];
+		authors?: string[];
 	};
 	protected override splatted = true;
 
@@ -69,7 +67,7 @@ export class BranchNode
 			showCurrent?: boolean;
 			showStatus?: boolean;
 			showTracking?: boolean;
-			authors?: GitUser[];
+			authors?: string[];
 		},
 	) {
 		super(uri, view, parent);
@@ -131,47 +129,37 @@ export class BranchNode
 
 	async getChildren(): Promise<ViewNode[]> {
 		if (this._children == null) {
-			let prPromise;
-			if (
-				this.view.config.pullRequests.enabled &&
-				this.view.config.pullRequests.showForBranches &&
-				(this.branch.upstream != null || this.branch.remote)
-			) {
-				prPromise = this.branch.getAssociatedPullRequest(
-					this.root ? { include: [PullRequestState.Open, PullRequestState.Merged] } : undefined,
-				);
-			}
+			const children = [];
 
-			const range = !this.branch.remote
-				? await this.view.container.git.getBranchAheadRange(this.branch)
-				: undefined;
-			const [log, getBranchAndTagTips, status, mergeStatus, rebaseStatus, unpublishedCommits] = await Promise.all(
-				[
+			const range = await Container.git.getBranchAheadRange(this.branch);
+			const [log, getBranchAndTagTips, status, mergeStatus, rebaseStatus, pr, unpublishedCommits] =
+				await Promise.all([
 					this.getLog(),
-					this.view.container.git.getBranchesAndTagsTipsFn(this.uri.repoPath, this.branch.name),
+					Container.git.getBranchesAndTagsTipsFn(this.uri.repoPath, this.branch.name),
 					this.options.showStatus && this.branch.current
-						? this.view.container.git.getStatusForRepo(this.uri.repoPath)
+						? Container.git.getStatusForRepo(this.uri.repoPath)
 						: undefined,
 					this.options.showStatus && this.branch.current
-						? this.view.container.git.getMergeStatus(this.uri.repoPath!)
+						? Container.git.getMergeStatus(this.uri.repoPath!)
 						: undefined,
-					this.options.showStatus ? this.view.container.git.getRebaseStatus(this.uri.repoPath!) : undefined,
-					range
-						? this.view.container.git.getLogRefsOnly(this.uri.repoPath!, {
+					this.options.showStatus ? Container.git.getRebaseStatus(this.uri.repoPath!) : undefined,
+					this.view.config.pullRequests.enabled &&
+					this.view.config.pullRequests.showForBranches &&
+					(this.branch.upstream != null || this.branch.remote)
+						? this.branch.getAssociatedPullRequest(
+								this.root ? { include: [PullRequestState.Open, PullRequestState.Merged] } : undefined,
+						  )
+						: undefined,
+					range && !this.branch.remote
+						? Container.git.getLogRefsOnly(this.uri.repoPath!, {
 								limit: 0,
 								ref: range,
 						  })
 						: undefined,
-				],
-			);
+				]);
 			if (log == null) return [new MessageNode(this.view, this, 'No commits could be found.')];
 
-			const children = [];
-
-			let prInsertIndex = 0;
-
 			if (this.options.showComparison !== false && !(this.view instanceof RemotesView)) {
-				prInsertIndex++;
 				children.push(
 					new CompareBranchNode(
 						this.uri,
@@ -184,6 +172,10 @@ export class BranchNode
 				);
 			}
 
+			if (pr != null) {
+				children.push(new PullRequestNode(this.view, this, pr, this.branch));
+			}
+
 			if (this.options.showStatus && mergeStatus != null) {
 				children.push(
 					new MergeStatusNode(
@@ -191,7 +183,7 @@ export class BranchNode
 						this,
 						this.branch,
 						mergeStatus,
-						status ?? (await this.view.container.git.getStatusForRepo(this.uri.repoPath)),
+						status ?? (await Container.git.getStatusForRepo(this.uri.repoPath)),
 						this.root,
 					),
 				);
@@ -206,7 +198,7 @@ export class BranchNode
 						this,
 						this.branch,
 						rebaseStatus,
-						status ?? (await this.view.container.git.getStatusForRepo(this.uri.repoPath)),
+						status ?? (await Container.git.getStatusForRepo(this.uri.repoPath)),
 						this.root,
 					),
 				);
@@ -249,7 +241,7 @@ export class BranchNode
 
 			children.push(
 				...insertDateMarkers(
-					map(
+					Iterables.map(
 						log.commits.values(),
 						c =>
 							new CommitNode(
@@ -267,31 +259,10 @@ export class BranchNode
 
 			if (log.hasMore) {
 				children.push(
-					new LoadMoreNode(this.view, this, children[children.length - 1], {
-						getCount: () => this.view.container.git.getCommitCount(this.branch.repoPath, this.branch.name),
-					}),
+					new LoadMoreNode(this.view, this, children[children.length - 1], undefined, () =>
+						Container.git.getCommitCount(this.branch.repoPath, this.branch.name),
+					),
 				);
-			}
-
-			if (prPromise != null) {
-				const pr = await prPromise;
-				if (pr != null) {
-					children.splice(prInsertIndex, 0, new PullRequestNode(this.view, this, pr, this.branch));
-				}
-
-				// const pr = await Promise.race([
-				// 	prPromise,
-				// 	new Promise<null>(resolve => setTimeout(() => resolve(null), 100)),
-				// ]);
-				// if (pr != null) {
-				// 	children.splice(prInsertIndex, 0, new PullRequestNode(this.view, this, pr, this.branch));
-				// } else if (pr === null) {
-				// 	void prPromise.then(pr => {
-				// 		if (pr == null) return;
-
-				// 		void this.triggerChange();
-				// 	});
-				// }
 			}
 
 			this._children = children;
@@ -361,8 +332,8 @@ export class BranchNode
 
 				description = this.options.showAsCommits
 					? `${this.branch.getTrackingStatus({
-							suffix: pad(GlyphChars.Dot, 1, 1),
-					  })}${this.branch.getNameWithoutRemote()}${this.branch.rebasing ? ' (Rebasing)' : ''}${pad(
+							suffix: Strings.pad(GlyphChars.Dot, 1, 1),
+					  })}${this.branch.getNameWithoutRemote()}${this.branch.rebasing ? ' (Rebasing)' : ''}${Strings.pad(
 							arrows,
 							2,
 							2,
@@ -388,7 +359,7 @@ export class BranchNode
 				if (this.branch.state.ahead || this.branch.state.behind) {
 					if (this.branch.state.ahead) {
 						contextValue += '+ahead';
-						color = new ThemeColor(Colors.UnpublishedChangesIconColor);
+						color = new ThemeColor(Colors.UnpushlishedChangesIconColor);
 						iconSuffix = '-green';
 					}
 					if (this.branch.state.behind) {
@@ -399,7 +370,7 @@ export class BranchNode
 				}
 			} else {
 				const providers = GitRemote.getHighlanderProviders(
-					await this.view.container.git.getRemotesWithProviders(this.branch.repoPath),
+					await Container.git.getRemotes(this.branch.repoPath),
 				);
 				const providerName = providers?.length ? providers[0].name : undefined;
 
@@ -408,19 +379,16 @@ export class BranchNode
 		}
 
 		if (this.branch.date != null) {
-			description = `${description ? `${description}${pad(GlyphChars.Dot, 2, 2)}` : ''}${
+			description = `${description ? `${description}${Strings.pad(GlyphChars.Dot, 2, 2)}` : ''}${
 				this.branch.formattedDate
 			}`;
 
 			tooltip += `\n\nLast commit ${this.branch.formatDateFromNow()} (${this.branch.formatDate(
-				Container.instance.BranchDateFormatting.dateFormat,
+				BranchDateFormatting.dateFormat,
 			)})`;
 		}
 
 		tooltip = new MarkdownString(tooltip, true);
-		tooltip.supportHtml = true;
-		tooltip.isTrusted = true;
-
 		if (this.branch.starred) {
 			tooltip.appendMarkdown('\\\n$(star-full) Favorited');
 		}
@@ -435,8 +403,8 @@ export class BranchNode
 		item.iconPath = this.options.showAsCommits
 			? new ThemeIcon('git-commit', color)
 			: {
-					dark: this.view.container.context.asAbsolutePath(`images/dark/icon-branch${iconSuffix}.svg`),
-					light: this.view.container.context.asAbsolutePath(`images/light/icon-branch${iconSuffix}.svg`),
+					dark: Container.context.asAbsolutePath(`images/dark/icon-branch${iconSuffix}.svg`),
+					light: Container.context.asAbsolutePath(`images/light/icon-branch${iconSuffix}.svg`),
 			  };
 		item.tooltip = tooltip;
 		item.resourceUri = Uri.parse(
@@ -482,7 +450,7 @@ export class BranchNode
 				limit = Math.min(this.branch.state.ahead + 1, limit * 2);
 			}
 
-			this._log = await this.view.container.git.getLog(this.uri.repoPath!, {
+			this._log = await Container.git.getLog(this.uri.repoPath!, {
 				limit: limit,
 				ref: this.ref.ref,
 				authors: this.options?.authors,

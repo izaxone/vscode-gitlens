@@ -1,17 +1,15 @@
+'use strict';
 import { TextDocumentShowOptions, TextEditor, Uri } from 'vscode';
-import { Commands, GlyphChars, quickPickTitleMaxChars } from '../constants';
-import type { Container } from '../container';
+import { GlyphChars, quickPickTitleMaxChars } from '../constants';
+import { Container } from '../container';
+import { GitRevision } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitRevision } from '../git/models';
 import { Logger } from '../logger';
 import { Messages } from '../messages';
-import { CommitPicker } from '../quickpicks/commitPicker';
-import { CommandQuickPickItem } from '../quickpicks/items/common';
-import { command, executeCommand } from '../system/command';
-import { pad } from '../system/string';
-import { ActiveEditorCommand, getCommandUri } from './base';
+import { CommandQuickPickItem, CommitPicker } from '../quickpicks';
+import { Strings } from '../system';
+import { ActiveEditorCommand, command, Commands, executeCommand, getCommandUri } from './common';
 import { DiffWithCommandArgs } from './diffWith';
-import { DiffWithRevisionFromCommandArgs } from './diffWithRevisionFrom';
 
 export interface DiffWithRevisionCommandArgs {
 	line?: number;
@@ -20,7 +18,7 @@ export interface DiffWithRevisionCommandArgs {
 
 @command()
 export class DiffWithRevisionCommand extends ActiveEditorCommand {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.DiffWithRevision);
 	}
 
@@ -36,20 +34,20 @@ export class DiffWithRevisionCommand extends ActiveEditorCommand {
 		}
 
 		try {
-			const log = this.container.git
+			const log = Container.git
 				.getLogForFile(gitUri.repoPath, gitUri.fsPath)
 				.then(
 					log =>
 						log ??
 						(gitUri.sha
-							? this.container.git.getLogForFile(gitUri.repoPath, gitUri.fsPath, { ref: gitUri.sha })
+							? Container.git.getLogForFile(gitUri.repoPath, gitUri.fsPath, { ref: gitUri.sha })
 							: undefined),
 				);
 
-			const title = `Open Changes with Revision${pad(GlyphChars.Dot, 2, 2)}`;
+			const title = `Open Changes with Revision${Strings.pad(GlyphChars.Dot, 2, 2)}`;
 			const pick = await CommitPicker.show(
 				log,
-				`${title}${gitUri.getFormattedFileName({
+				`${title}${gitUri.getFormattedFilename({
 					suffix: gitUri.sha ? `:${GitRevision.shorten(gitUri.sha)}` : undefined,
 					truncateTo: quickPickTitleMaxChars - title.length,
 				})}`,
@@ -72,14 +70,10 @@ export class DiffWithRevisionCommand extends ActiveEditorCommand {
 							showOptions: args!.showOptions,
 						}));
 					},
-					showOtherReferences: [
-						CommandQuickPickItem.fromCommand('Choose a Branch or Tag...', Commands.DiffWithRevisionFrom),
-						CommandQuickPickItem.fromCommand<DiffWithRevisionFromCommandArgs>(
-							'Choose a Stash...',
-							Commands.DiffWithRevisionFrom,
-							{ stash: true },
-						),
-					],
+					showOtherReferences: CommandQuickPickItem.fromCommand(
+						'Choose a branch or tag...',
+						Commands.DiffWithRevisionFrom,
+					),
 				},
 			);
 			if (pick == null) return;

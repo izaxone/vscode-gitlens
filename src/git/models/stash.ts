@@ -1,4 +1,5 @@
-import { GitStashCommit } from './commit';
+'use strict';
+import { GitStashCommit } from './stashCommit';
 
 export interface GitStash {
 	readonly repoPath: string;

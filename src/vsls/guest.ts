@@ -1,15 +1,16 @@
-import { CancellationToken, Disposable, Uri, window } from 'vscode';
+'use strict';
+import { CancellationToken, Disposable, window, WorkspaceFolder } from 'vscode';
 import type { LiveShare, SharedServiceProxy } from '../@types/vsls';
-import { Container } from '../container';
-import { GitCommandOptions } from '../git/commandOptions';
+import { setEnabled } from '../extension';
+import { GitCommandOptions, Repository, RepositoryChangeEvent } from '../git/git';
 import { Logger } from '../logger';
-import { debug, log } from '../system/decorators/log';
+import { debug, log } from '../system';
 import { VslsHostService } from './host';
-import { GetRepositoriesForUriRequestType, GitCommandRequestType, RepositoryProxy, RequestType } from './protocol';
+import { GitCommandRequestType, RepositoriesInFolderRequestType, RepositoryProxy, RequestType } from './protocol';
 
 export class VslsGuestService implements Disposable {
 	@log()
-	static async connect(api: LiveShare, container: Container) {
+	static async connect(api: LiveShare) {
 		const cc = Logger.getCorrelationContext();
 
 		try {
@@ -18,18 +19,14 @@ export class VslsGuestService implements Disposable {
 				throw new Error('Failed to connect to host service');
 			}
 
-			return new VslsGuestService(api, service, container);
+			return new VslsGuestService(api, service);
 		} catch (ex) {
 			Logger.error(ex, cc);
 			return undefined;
 		}
 	}
 
-	constructor(
-		private readonly _api: LiveShare,
-		private readonly _service: SharedServiceProxy,
-		private readonly container: Container,
-	) {
+	constructor(private readonly _api: LiveShare, private readonly _service: SharedServiceProxy) {
 		_service.onDidChangeIsServiceAvailable(this.onAvailabilityChanged.bind(this));
 		this.onAvailabilityChanged(_service.isServiceAvailable);
 	}
@@ -41,12 +38,12 @@ export class VslsGuestService implements Disposable {
 	@log()
 	private onAvailabilityChanged(available: boolean) {
 		if (available) {
-			void this.container.git.setEnabledContext(true);
+			void setEnabled(true);
 
 			return;
 		}
 
-		void this.container.git.setEnabledContext(false);
+		void setEnabled(false);
 		void window.showWarningMessage(
 			'GitLens features will be unavailable. Unable to connect to the host GitLens service. The host may have disabled GitLens guest access or may not have GitLens installed.',
 		);
@@ -63,12 +60,18 @@ export class VslsGuestService implements Disposable {
 	}
 
 	@log()
-	async getRepositoriesForUri(uri: Uri): Promise<RepositoryProxy[]> {
-		const response = await this.sendRequest(GetRepositoriesForUriRequestType, {
-			folderUri: uri.toString(),
+	async getRepositoriesInFolder(
+		folder: WorkspaceFolder,
+		onAnyRepositoryChanged: (repo: Repository, e: RepositoryChangeEvent) => void,
+	): Promise<Repository[]> {
+		const response = await this.sendRequest(RepositoriesInFolderRequestType, {
+			folderUri: folder.uri.toString(true),
 		});
 
-		return response.repositories;
+		return response.repositories.map(
+			(r: RepositoryProxy) =>
+				new Repository(folder, r.path, r.root, onAnyRepositoryChanged, !window.state.focused, r.closed),
+		);
 	}
 
 	@debug()

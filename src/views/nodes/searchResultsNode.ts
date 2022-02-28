@@ -1,11 +1,10 @@
+'use strict';
 import { ThemeIcon, TreeItem } from 'vscode';
-import { executeGitCommand } from '../../commands/gitCommands.actions';
+import { executeGitCommand } from '../../commands';
+import { Container } from '../../container';
+import { GitLog, SearchPattern } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitLog } from '../../git/models';
-import { SearchPattern } from '../../git/search';
-import { gate } from '../../system/decorators/gate';
-import { debug, log } from '../../system/decorators/log';
-import { md5, pluralize } from '../../system/string';
+import { debug, gate, log, Strings } from '../../system';
 import { SearchAndCompareView } from '../searchAndCompareView';
 import { RepositoryNode } from './repositoryNode';
 import { CommitsQueryResults, ResultsCommitsNode } from './resultsCommitsNode';
@@ -29,7 +28,7 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 	}
 
 	static getPinnableId(repoPath: string, search: SearchPattern) {
-		return md5(`${repoPath}|${SearchPattern.toKey(search)}`);
+		return Strings.sha1(`${repoPath}|${SearchPattern.toKey(search)}`);
 	}
 
 	static override is(node: any): node is SearchResultsNode {
@@ -133,8 +132,8 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 		const item = await this.ensureResults().getTreeItem();
 		item.id = this.id;
 		item.contextValue = `${ContextValues.SearchResults}${this._pinned ? '+pinned' : ''}`;
-		if (this.view.container.git.repositoryCount > 1) {
-			const repo = this.view.container.git.getRepository(this.repoPath);
+		if ((await Container.git.getRepositoryCount()) > 1) {
+			const repo = await Container.git.getRepository(this.repoPath);
 			item.description = repo?.formattedName ?? this.repoPath;
 		}
 		if (this._pinned) {
@@ -195,7 +194,7 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 		}
 
 		void this.triggerChange(false);
-		queueMicrotask(() => this.view.reveal(this, { expand: true, focus: true, select: true }));
+		setImmediate(() => this.view.reveal(this, { expand: true, focus: true, select: true }));
 	}
 
 	@gate()
@@ -211,7 +210,7 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 		this._pinned = Date.now();
 		await this.updatePinned();
 
-		queueMicrotask(() => this.view.reveal(this, { focus: true, select: true }));
+		setImmediate(() => this.view.reveal(this, { focus: true, select: true }));
 	}
 
 	@log()
@@ -221,7 +220,7 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 		this._pinned = 0;
 		await this.view.updatePinned(this.getPinnableId());
 
-		queueMicrotask(() => this.view.reveal(this, { focus: true, select: true }));
+		setImmediate(() => this.view.reveal(this, { focus: true, select: true }));
 	}
 
 	private getPinnableId() {
@@ -244,7 +243,7 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 		const resultsType =
 			label.resultsType === undefined ? { singular: 'result', plural: 'results' } : label.resultsType;
 
-		return `${pluralize(resultsType.singular, count, {
+		return `${Strings.pluralize(resultsType.singular, count, {
 			format: c => (log?.hasMore ? `${c}+` : undefined),
 			plural: resultsType.plural,
 			zero: 'No',
@@ -265,7 +264,7 @@ export class SearchResultsNode extends ViewNode<SearchAndCompareView> implements
 		let useCacheOnce = true;
 
 		return async (limit: number | undefined) => {
-			log = await (log ?? this.view.container.git.getLogForSearch(this.repoPath, this.search));
+			log = await (log ?? Container.git.getLogForSearch(this.repoPath, this.search));
 
 			if (!useCacheOnce && log != null && log.query != null) {
 				log = await log.query(limit);

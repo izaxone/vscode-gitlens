@@ -1,4 +1,4 @@
-// eslint-disable-next-line no-restricted-imports
+'use strict';
 import { debounce as _debounce, once as _once } from 'lodash-es';
 import { Disposable } from 'vscode';
 
@@ -12,6 +12,19 @@ export interface Deferrable<T extends (...args: any[]) => any> {
 interface PropOfValue {
 	(): any;
 	value: string | undefined;
+}
+
+export function cachedOnce<T>(fn: (...args: any[]) => Promise<T>, seed: T): (...args: any[]) => Promise<T> {
+	let cached: T | undefined = seed;
+	return (...args: any[]) => {
+		if (cached !== undefined) {
+			const promise = Promise.resolve(cached);
+			cached = undefined;
+
+			return promise;
+		}
+		return fn(...args);
+	};
 }
 
 export interface DebounceOptions {
@@ -138,29 +151,66 @@ export function propOf<T, K extends Extract<keyof T, string>>(o: T, key: K) {
 	return propOfCore(o, key);
 }
 
-export function disposableInterval(fn: (...args: any[]) => void, ms: number): Disposable {
-	let timer: ReturnType<typeof setInterval> | undefined;
+export function interval(fn: (...args: any[]) => void, ms: number): Disposable {
+	let timer: NodeJS.Timer | undefined;
 	const disposable = {
 		dispose: () => {
-			if (timer != null) {
+			if (timer !== undefined) {
 				clearInterval(timer);
 				timer = undefined;
 			}
 		},
 	};
-	timer = setInterval(fn, ms);
+	timer = global.setInterval(fn, ms);
 
 	return disposable;
 }
 
-/**
- * Szudzik elegant pairing function
- * http://szudzik.com/ElegantPairing.pdf
- */
-export function szudzikPairing(x: number, y: number): number {
-	return x >= y ? x * x + x + y : x + y * y;
+export function progress<T>(promise: Promise<T>, intervalMs: number, onProgress: () => boolean): Promise<T> {
+	return new Promise((resolve, reject) => {
+		let timer: NodeJS.Timer | undefined;
+		timer = global.setInterval(() => {
+			if (onProgress()) {
+				if (timer !== undefined) {
+					clearInterval(timer);
+					timer = undefined;
+				}
+			}
+		}, intervalMs);
+
+		promise.then(
+			() => {
+				if (timer !== undefined) {
+					clearInterval(timer);
+					timer = undefined;
+				}
+
+				resolve(promise);
+			},
+			ex => {
+				if (timer !== undefined) {
+					clearInterval(timer);
+					timer = undefined;
+				}
+
+				reject(ex);
+			},
+		);
+	});
 }
 
 export async function wait(ms: number) {
 	await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function waitUntil(fn: (...args: any[]) => boolean, timeout: number): Promise<boolean> {
+	const max = Math.round(timeout / 100);
+	let counter = 0;
+	while (true) {
+		if (fn()) return true;
+		if (counter > max) return false;
+
+		await wait(100);
+		counter++;
+	}
 }

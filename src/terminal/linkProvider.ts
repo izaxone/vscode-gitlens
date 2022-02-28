@@ -1,13 +1,13 @@
+'use strict';
 import { commands, Disposable, TerminalLink, TerminalLinkContext, TerminalLinkProvider, window } from 'vscode';
-import type {
+import {
+	Commands,
 	GitCommandsCommandArgs,
 	ShowQuickBranchHistoryCommandArgs,
 	ShowQuickCommitCommandArgs,
 } from '../commands';
-import { Commands } from '../constants';
 import { Container } from '../container';
-import { PagedResult } from '../git/gitProvider';
-import { GitBranch, GitReference, GitTag } from '../git/models';
+import { GitReference } from '../git/git';
 
 const commandsRegexShared =
 	/\b(g(?:it)?\b\s*)\b(branch|checkout|cherry-pick|fetch|grep|log|merge|pull|push|rebase|reset|revert|show|stash|status|tag)\b/gi;
@@ -26,7 +26,7 @@ interface GitTerminalLink<T = object> extends TerminalLink {
 export class GitTerminalLinkProvider implements Disposable, TerminalLinkProvider<GitTerminalLink> {
 	private disposable: Disposable;
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		this.disposable = window.registerTerminalLinkProvider(this);
 	}
 
@@ -37,13 +37,12 @@ export class GitTerminalLinkProvider implements Disposable, TerminalLinkProvider
 	async provideTerminalLinks(context: TerminalLinkContext): Promise<GitTerminalLink[]> {
 		if (context.line.trim().length === 0) return [];
 
-		const repoPath = this.container.git.highlander?.path;
-		if (!repoPath) return [];
+		const repoPath = Container.git.getHighlanderRepoPath();
+		if (repoPath == null) return [];
 
 		const links: GitTerminalLink[] = [];
 
-		let branchResults: PagedResult<GitBranch> | undefined;
-		let tagResults: PagedResult<GitTag> | undefined;
+		const branchesAndTags = await Container.git.getBranchesAndOrTags(repoPath);
 
 		// Don't use the shared regex instance directly, because we can be called reentrantly (because of the awaits below)
 		const refRegex = new RegExp(refRegexShared, refRegexShared.flags);
@@ -92,41 +91,19 @@ export class GitTerminalLinkProvider implements Disposable, TerminalLinkProvider
 				continue;
 			}
 
-			if (branchResults === undefined) {
-				branchResults = await this.container.git.getBranches(repoPath);
-				// TODO@eamodio handle paging
-			}
-
-			const branch = branchResults.values.find(r => r.name === ref);
-			if (branch != null) {
+			const branchOrTag = branchesAndTags?.find(r => r.name === ref);
+			if (branchOrTag != null) {
 				const link: GitTerminalLink<ShowQuickBranchHistoryCommandArgs> = {
 					startIndex: match.index,
 					length: ref.length,
-					tooltip: 'Show Branch',
+					tooltip: branchOrTag.refType === 'branch' ? 'Show Branch' : 'Show Tag',
 					command: {
 						command: Commands.ShowQuickBranchHistory,
-						args: { repoPath: repoPath, branch: branch.name },
-					},
-				};
-				links.push(link);
-
-				continue;
-			}
-
-			if (tagResults === undefined) {
-				tagResults = await this.container.git.getTags(repoPath);
-				// TODO@eamodio handle paging
-			}
-
-			const tag = tagResults.values.find(r => r.name === ref);
-			if (tag != null) {
-				const link: GitTerminalLink<ShowQuickBranchHistoryCommandArgs> = {
-					startIndex: match.index,
-					length: ref.length,
-					tooltip: 'Show Tag',
-					command: {
-						command: Commands.ShowQuickBranchHistory,
-						args: { repoPath: repoPath, tag: tag.name },
+						args: {
+							branch: branchOrTag.refType === 'branch' ? branchOrTag.name : undefined,
+							tag: branchOrTag.refType === 'tag' ? branchOrTag.name : undefined,
+							repoPath: repoPath,
+						},
 					},
 				};
 				links.push(link);
@@ -157,7 +134,7 @@ export class GitTerminalLinkProvider implements Disposable, TerminalLinkProvider
 				continue;
 			}
 
-			if (await this.container.git.validateReference(repoPath, ref)) {
+			if (await Container.git.validateReference(repoPath, ref)) {
 				const link: GitTerminalLink<ShowQuickCommitCommandArgs> = {
 					startIndex: match.index,
 					length: ref.length,

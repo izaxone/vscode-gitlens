@@ -1,7 +1,7 @@
+'use strict';
 import { Container } from '../../container';
-import { GitBranch, GitLog, GitReference, GitRevisionReference, Repository } from '../../git/models';
-import { FlagsQuickPickItem } from '../../quickpicks/items/flags';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
+import { GitBranch, GitLog, GitReference, GitRevisionReference, Repository } from '../../git/git';
+import { FlagsQuickPickItem } from '../../quickpicks';
 import {
 	appendReposToTitle,
 	PartialStepState,
@@ -18,7 +18,6 @@ import {
 
 interface Context {
 	repos: Repository[];
-	associatedView: ViewsWithRepositoryFolders;
 	cache: Map<string, Promise<GitLog | undefined>>;
 	destination: GitBranch;
 	title: string;
@@ -41,8 +40,8 @@ export interface ResetGitCommandArgs {
 type ResetStepState<T extends State = State> = ExcludeSome<StepState<T>, 'repo', string>;
 
 export class ResetGitCommand extends QuickCommand<State> {
-	constructor(container: Container, args?: ResetGitCommandArgs) {
-		super(container, 'reset', 'reset', 'Reset', { description: 'resets the current branch to a specified commit' });
+	constructor(args?: ResetGitCommandArgs) {
+		super('reset', 'reset', 'Reset', { description: 'resets the current branch to a specified commit' });
 
 		let counter = 0;
 		if (args?.state?.repo != null) {
@@ -72,8 +71,7 @@ export class ResetGitCommand extends QuickCommand<State> {
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
-			associatedView: this.container.commitsView,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			cache: new Map<string, Promise<GitLog | undefined>>(),
 			destination: undefined!,
 			title: this.title,
@@ -120,7 +118,7 @@ export class ResetGitCommand extends QuickCommand<State> {
 
 				let log = context.cache.get(ref);
 				if (log == null) {
-					log = this.container.git.getLog(state.repo.path, { ref: ref, merges: false });
+					log = Container.git.getLog(state.repo.path, { ref: ref, merges: false });
 					context.cache.set(ref, log);
 				}
 

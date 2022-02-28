@@ -8,12 +8,12 @@ Please note the [Code of Conduct](CODE_OF_CONDUCT.md) document, please follow it
 
 ## Your First Code Contribution
 
-Unsure where to begin contributing? You can start by looking through the [`help-wanted`](https://github.com/gitkraken/vscode-gitlens/labels/help-wanted) issues.
+Unsure where to begin contributing? You can start by looking through the [`help-wanted`](https://github.com/eamodio/vscode-gitlens/labels/help-wanted) issues.
 
 ### Getting the code
 
 ```
-git clone https://github.com/gitkraken/vscode-gitlens.git
+git clone https://github.com/eamodio/vscode-gitlens.git
 ```
 
 Prerequisites
@@ -95,7 +95,7 @@ yarn run bundle
 To generate a VSIX (installation package) run the following from a terminal:
 
 ```
-yarn run package
+yarn run pack
 ```
 
 ### Debugging
@@ -104,14 +104,8 @@ yarn run package
 
 1. Open the `vscode-gitlens` folder
 2. Ensure the required [dependencies](#dependencies) are installed
-3. Choose the `Watch & Run` launch configuration from the launch dropdown in the Run and Debug viewlet and press `F5`.
+3. Choose the `Watch & Launch GitLens` launch configuration from the launch dropdown in the Run and Debug viewlet and press `F5`.
 
 ## Submitting a Pull Request
 
 Please follow all the instructions in the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
-
-### Contributions to GitLens Premium Licensed Files
-
-This repository contains both OSS-licensed and non-OSS-licensed files. All files in or under any directory named "premium" fall under LICENSE.premium. The remaining files fall under LICENSE, the MIT license.
-
-If a pull request is submitted which contains changes to files in or under any directory named "premium", then you agree that GitKraken and/or its licensors (as applicable) retain all right, title and interest in and to all such modifications and/or patches.

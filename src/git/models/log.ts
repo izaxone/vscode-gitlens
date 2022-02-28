@@ -1,9 +1,12 @@
+'use strict';
 import { Range } from 'vscode';
-import { GitCommit } from './commit';
+import { GitAuthor } from './commit';
+import { GitLogCommit } from './logCommit';
 
 export interface GitLog {
 	readonly repoPath: string;
-	readonly commits: Map<string, GitCommit>;
+	readonly authors: Map<string, GitAuthor>;
+	readonly commits: Map<string, GitLogCommit>;
 
 	readonly sha: string | undefined;
 	readonly range: Range | undefined;
@@ -11,7 +14,6 @@ export interface GitLog {
 	readonly count: number;
 	readonly limit: number | undefined;
 	readonly hasMore: boolean;
-	readonly cursor?: string;
 
 	query?(limit: number | undefined): Promise<GitLog | undefined>;
 	more?(limit: number | { until?: string } | undefined): Promise<GitLog | undefined>;

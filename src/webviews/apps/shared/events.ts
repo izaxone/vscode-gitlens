@@ -1,3 +1,5 @@
+'use strict';
+
 export interface Disposable {
 	dispose(): void;
 }
@@ -39,7 +41,6 @@ export class Emitter<T> {
 						}
 					},
 				};
-
 				if (Array.isArray(disposables)) {
 					disposables.push(result);
 				}
@@ -77,6 +78,7 @@ export class Emitter<T> {
 						listener[0].call(listener[1], event);
 					}
 				} catch (e) {
+					// eslint-disable-next-line no-debugger
 					debugger;
 				}
 			}

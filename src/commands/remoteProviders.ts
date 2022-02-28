@@ -1,11 +1,9 @@
-import { Commands } from '../constants';
-import type { Container } from '../container';
-import { GitCommit, GitRemote, Repository } from '../git/models';
-import { RichRemoteProvider } from '../git/remotes/provider';
+'use strict';
+import { Container } from '../container';
+import { GitCommit, GitRemote, Repository, RichRemoteProvider } from '../git/git';
 import { RepositoryPicker } from '../quickpicks/repositoryPicker';
-import { command } from '../system/command';
-import { first } from '../system/iterable';
-import { Command, CommandContext, isCommandContextViewNodeHasRemote } from './base';
+import { Iterables } from '../system';
+import { command, Command, CommandContext, Commands, isCommandContextViewNodeHasRemote } from './common';
 
 export interface ConnectRemoteProviderCommandArgs {
 	remote: string;
@@ -30,7 +28,7 @@ export class ConnectRemoteProviderCommand extends Command {
 		return super.getMarkdownCommandArgsCore<ConnectRemoteProviderCommandArgs>(Commands.ConnectRemoteProvider, args);
 	}
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.ConnectRemoteProvider);
 	}
 
@@ -49,7 +47,7 @@ export class ConnectRemoteProviderCommand extends Command {
 		if (args?.repoPath == null) {
 			const repos = new Map<Repository, GitRemote<RichRemoteProvider>>();
 
-			for (const repo of this.container.git.openRepositories) {
+			for (const repo of await Container.git.getOrderedRepositories()) {
 				const remote = await repo.getRichRemote();
 				if (remote?.provider != null && !(await remote.provider.isConnected())) {
 					repos.set(repo, remote);
@@ -59,7 +57,7 @@ export class ConnectRemoteProviderCommand extends Command {
 			if (repos.size === 0) return false;
 			if (repos.size === 1) {
 				let repo;
-				[repo, remote] = first(repos);
+				[repo, remote] = Iterables.first(repos);
 				repoPath = repo.path;
 			} else {
 				const pick = await RepositoryPicker.show(
@@ -75,21 +73,18 @@ export class ConnectRemoteProviderCommand extends Command {
 		} else if (args?.remote == null) {
 			repoPath = args.repoPath;
 
-			remote = await this.container.git.getRichRemoteProvider(repoPath, { includeDisconnected: true });
+			remote = await Container.git.getRichRemoteProvider(repoPath, { includeDisconnected: true });
 			if (remote == null) return false;
 		} else {
 			repoPath = args.repoPath;
 
-			remotes = await this.container.git.getRemotesWithProviders(repoPath);
+			remotes = await Container.git.getRemotes(repoPath);
 			remote = remotes.find(r => r.id === args.remote) as GitRemote<RichRemoteProvider> | undefined;
-			if (!remote?.hasRichProvider()) return false;
+			if (!remote?.provider.hasApi()) return false;
 		}
 
 		const connected = await remote.provider.connect();
-		if (
-			connected &&
-			!(remotes ?? (await this.container.git.getRemotesWithProviders(repoPath))).some(r => r.default)
-		) {
+		if (connected && !(remotes ?? (await Container.git.getRemotes(repoPath))).some(r => r.default)) {
 			await remote.setAsDefault(true);
 		}
 		return connected;
@@ -122,7 +117,7 @@ export class DisconnectRemoteProviderCommand extends Command {
 		);
 	}
 
-	constructor(private readonly container: Container) {
+	constructor() {
 		super(Commands.DisconnectRemoteProvider);
 	}
 
@@ -140,7 +135,7 @@ export class DisconnectRemoteProviderCommand extends Command {
 		if (args?.repoPath == null) {
 			const repos = new Map<Repository, GitRemote<RichRemoteProvider>>();
 
-			for (const repo of this.container.git.openRepositories) {
+			for (const repo of await Container.git.getOrderedRepositories()) {
 				const remote = await repo.getRichRemote(true);
 				if (remote != null) {
 					repos.set(repo, remote);
@@ -150,7 +145,7 @@ export class DisconnectRemoteProviderCommand extends Command {
 			if (repos.size === 0) return undefined;
 			if (repos.size === 1) {
 				let repo;
-				[repo, remote] = first(repos);
+				[repo, remote] = Iterables.first(repos);
 				repoPath = repo.path;
 			} else {
 				const pick = await RepositoryPicker.show(
@@ -166,15 +161,15 @@ export class DisconnectRemoteProviderCommand extends Command {
 		} else if (args?.remote == null) {
 			repoPath = args.repoPath;
 
-			remote = await this.container.git.getRichRemoteProvider(repoPath, { includeDisconnected: false });
+			remote = await Container.git.getRichRemoteProvider(repoPath, { includeDisconnected: false });
 			if (remote == null) return undefined;
 		} else {
 			repoPath = args.repoPath;
 
-			remote = (await this.container.git.getRemotesWithProviders(repoPath)).find(r => r.id === args.remote) as
+			remote = (await Container.git.getRemotes(repoPath)).find(r => r.id === args.remote) as
 				| GitRemote<RichRemoteProvider>
 				| undefined;
-			if (!remote?.hasRichProvider()) return undefined;
+			if (!remote?.provider.hasApi()) return undefined;
 		}
 
 		return remote.provider.disconnect();

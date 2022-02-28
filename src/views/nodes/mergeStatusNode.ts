@@ -1,10 +1,10 @@
+'use strict';
+import * as paths from 'path';
 import { MarkdownString, ThemeColor, ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { ViewFilesLayout } from '../../configuration';
+import { GitBranch, GitMergeStatus, GitReference, GitStatus } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitBranch, GitMergeStatus, GitReference, GitStatus } from '../../git/models';
-import { makeHierarchical } from '../../system/array';
-import { joinPaths, normalizePath } from '../../system/path';
-import { pluralize, sortCompare } from '../../system/string';
+import { Arrays, Strings } from '../../system';
 import { ViewsWithCommits } from '../viewBase';
 import { BranchNode } from './branchNode';
 import { FileNode, FolderNode } from './folderNode';
@@ -45,17 +45,19 @@ export class MergeStatusNode extends ViewNode<ViewsWithCommits> {
 		);
 
 		if (this.view.config.files.layout !== ViewFilesLayout.List) {
-			const hierarchy = makeHierarchical(
+			const hierarchy = Arrays.makeHierarchical(
 				children,
 				n => n.uri.relativePath.split('/'),
-				(...parts: string[]) => normalizePath(joinPaths(...parts)),
+				(...parts: string[]) => Strings.normalizePath(paths.join(...parts)),
 				this.view.config.files.compact,
 			);
 
 			const root = new FolderNode(this.view, this, this.repoPath, '', hierarchy);
 			children = root.getChildren() as FileNode[];
 		} else {
-			children.sort((a, b) => sortCompare(a.label!, b.label!));
+			children.sort((a, b) =>
+				a.label!.localeCompare(b.label!, undefined, { numeric: true, sensitivity: 'base' }),
+			);
 		}
 
 		return children;
@@ -72,23 +74,22 @@ export class MergeStatusNode extends ViewNode<ViewsWithCommits> {
 		);
 		item.id = this.id;
 		item.contextValue = ContextValues.Merge;
-		item.description = this.status?.hasConflicts ? pluralize('conflict', this.status.conflicts.length) : undefined;
+		item.description = this.status?.hasConflicts
+			? Strings.pluralize('conflict', this.status.conflicts.length)
+			: undefined;
 		item.iconPath = this.status?.hasConflicts
 			? new ThemeIcon('warning', new ThemeColor('list.warningForeground'))
 			: new ThemeIcon('debug-pause', new ThemeColor('list.foreground'));
-
-		const markdown = new MarkdownString(
+		item.tooltip = new MarkdownString(
 			`${`Merging ${
 				this.mergeStatus.incoming != null ? GitReference.toString(this.mergeStatus.incoming) : ''
 			}into ${GitReference.toString(this.mergeStatus.current)}`}${
-				this.status?.hasConflicts ? `\n\n${pluralize('conflicted file', this.status.conflicts.length)}` : ''
+				this.status?.hasConflicts
+					? `\n\n${Strings.pluralize('conflicted file', this.status.conflicts.length)}`
+					: ''
 			}`,
 			true,
 		);
-		markdown.supportHtml = true;
-		markdown.isTrusted = true;
-
-		item.tooltip = markdown;
 
 		return item;
 	}

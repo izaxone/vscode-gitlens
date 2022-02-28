@@ -1,9 +1,9 @@
-import { CoreCommands } from '../../constants';
-import type { Container } from '../../container';
-import type { GitContributor, Repository } from '../../git/models';
-import { executeCoreCommand } from '../../system/command';
-import { normalizePath } from '../../system/path';
-import { ViewsWithRepositoryFolders } from '../../views/viewBase';
+'use strict';
+import { commands } from 'vscode';
+import { Container } from '../../container';
+import { GitContributor, Repository } from '../../git/git';
+import { GitService } from '../../git/gitService';
+import { Strings } from '../../system';
 import {
 	PartialStepState,
 	pickContributorsStep,
@@ -17,7 +17,6 @@ import {
 interface Context {
 	repos: Repository[];
 	activeRepo: Repository | undefined;
-	associatedView: ViewsWithRepositoryFolders;
 	title: string;
 }
 
@@ -34,10 +33,8 @@ export interface CoAuthorsGitCommandArgs {
 type CoAuthorStepState<T extends State = State> = ExcludeSome<StepState<T>, 'repo', string>;
 
 export class CoAuthorsGitCommand extends QuickCommand<State> {
-	constructor(container: Container, args?: CoAuthorsGitCommandArgs) {
-		super(container, 'co-authors', 'co-authors', 'Add Co-Authors', {
-			description: 'adds co-authors to a commit message',
-		});
+	constructor(args?: CoAuthorsGitCommandArgs) {
+		super('co-authors', 'co-authors', 'Add Co-Authors', { description: 'adds co-authors to a commit message' });
 
 		let counter = 0;
 		if (args?.state?.repo != null) {
@@ -63,7 +60,7 @@ export class CoAuthorsGitCommand extends QuickCommand<State> {
 	}
 
 	async execute(state: CoAuthorStepState) {
-		const repo = await this.container.git.getOrOpenScmRepository(state.repo.path);
+		const repo = await GitService.getOrOpenBuiltInGitRepository(state.repo.path);
 		if (repo == null) return;
 
 		let message = repo.inputBox.value;
@@ -87,33 +84,32 @@ export class CoAuthorsGitCommand extends QuickCommand<State> {
 				newlines = '\n\n\n';
 			}
 
-			message += `${newlines}Co-authored-by: ${c.getCoauthor()}`;
+			message += `${newlines}Co-authored-by: ${c.toCoauthor()}`;
 		}
 
 		repo.inputBox.value = message;
-		void (await executeCoreCommand(CoreCommands.ShowSCM));
+		void (await commands.executeCommand('workbench.view.scm'));
 	}
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
 		const context: Context = {
-			repos: this.container.git.openRepositories,
+			repos: [...(await Container.git.getOrderedRepositories())],
 			activeRepo: undefined,
-			associatedView: this.container.contributorsView,
 			title: this.title,
 		};
 
-		const scmRepositories = await this.container.git.getOpenScmRepositories();
-		if (scmRepositories.length) {
+		const gitApi = await GitService.getBuiltInGitApi();
+		if (gitApi != null) {
 			// Filter out any repo's that are not known to the built-in git
 			context.repos = context.repos.filter(repo =>
-				scmRepositories.find(r => normalizePath(r.rootUri.fsPath) === repo.path),
+				gitApi.repositories.find(r => Strings.normalizePath(r.rootUri.fsPath) === repo.path),
 			);
 
 			// Ensure that the active repo is known to the built-in git
-			context.activeRepo = await this.container.git.getOrOpenRepositoryForEditor();
+			context.activeRepo = await Container.git.getActiveRepository();
 			if (
 				context.activeRepo != null &&
-				!scmRepositories.some(r => r.rootUri.fsPath === context.activeRepo!.path)
+				!gitApi.repositories.some(r => r.rootUri.fsPath === context.activeRepo!.path)
 			) {
 				context.activeRepo = undefined;
 			}

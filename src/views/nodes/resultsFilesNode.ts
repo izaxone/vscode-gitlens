@@ -1,14 +1,11 @@
+'use strict';
+import * as paths from 'path';
 import { ThemeIcon, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { ViewFilesLayout } from '../../configuration';
+import { Container } from '../../container';
+import { GitFile } from '../../git/git';
 import { GitUri } from '../../git/gitUri';
-import { GitFile } from '../../git/models';
-import { makeHierarchical } from '../../system/array';
-import { gate } from '../../system/decorators/gate';
-import { debug } from '../../system/decorators/log';
-import { map } from '../../system/iterable';
-import { joinPaths, normalizePath } from '../../system/path';
-import { cancellable, PromiseCancelledError } from '../../system/promise';
-import { sortCompare } from '../../system/string';
+import { Arrays, debug, gate, Iterables, Promises, Strings } from '../../system';
 import { ViewsWithCommits } from '../viewBase';
 import { FileNode, FolderNode } from './folderNode';
 import { ResultsFileNode } from './resultsFileNode';
@@ -72,24 +69,28 @@ export class ResultsFilesNode extends ViewNode<ViewsWithCommits> {
 		if (files == null) return [];
 
 		let children: FileNode[] = [
-			...map(
+			...Iterables.map(
 				files,
 				s => new ResultsFileNode(this.view, this, this.repoPath, s, this.ref1, this.ref2, this.direction),
 			),
 		];
 
 		if (this.view.config.files.layout !== ViewFilesLayout.List) {
-			const hierarchy = makeHierarchical(
+			const hierarchy = Arrays.makeHierarchical(
 				children,
 				n => n.uri.relativePath.split('/'),
-				(...parts: string[]) => normalizePath(joinPaths(...parts)),
+				(...parts: string[]) => Strings.normalizePath(paths.join(...parts)),
 				this.view.config.files.compact,
 			);
 
 			const root = new FolderNode(this.view, this, this.repoPath, '', hierarchy);
 			children = root.getChildren() as FileNode[];
 		} else {
-			children.sort((a, b) => a.priority - b.priority || sortCompare(a.label!, b.label!));
+			children.sort(
+				(a, b) =>
+					a.priority - b.priority ||
+					a.label!.localeCompare(b.label!, undefined, { numeric: true, sensitivity: 'base' }),
+			);
 		}
 
 		return children;
@@ -102,7 +103,7 @@ export class ResultsFilesNode extends ViewNode<ViewsWithCommits> {
 		let state;
 
 		try {
-			const results = await cancellable(this.getFilesQueryResults(), 100);
+			const results = await Promises.cancellable(this.getFilesQueryResults(), 100);
 			label = results.label;
 			files = (this.filtered ? results.filtered?.files : undefined) ?? results.files;
 
@@ -118,8 +119,8 @@ export class ResultsFilesNode extends ViewNode<ViewsWithCommits> {
 					? TreeItemCollapsibleState.Expanded
 					: TreeItemCollapsibleState.Collapsed;
 		} catch (ex) {
-			if (ex instanceof PromiseCancelledError) {
-				ex.promise.then(() => queueMicrotask(() => this.triggerChange(false)));
+			if (ex instanceof Promises.CancellationError) {
+				ex.promise.then(() => setTimeout(() => this.triggerChange(false), 0));
 			}
 
 			label = 'files changed';
@@ -183,20 +184,16 @@ export class ResultsFilesNode extends ViewNode<ViewsWithCommits> {
 
 		const ref = this.filter === 'left' ? this.ref2 : this.ref1;
 
-		const mergeBase = await this.view.container.git.getMergeBase(
-			this.repoPath,
-			this.ref1 || 'HEAD',
-			this.ref2 || 'HEAD',
-		);
+		const mergeBase = await Container.git.getMergeBase(this.repoPath, this.ref1 || 'HEAD', this.ref2 || 'HEAD');
 		if (mergeBase != null) {
-			const files = await this.view.container.git.getDiffStatus(this.uri.repoPath!, `${mergeBase}..${ref}`);
+			const files = await Container.git.getDiffStatus(this.uri.repoPath!, `${mergeBase}..${ref}`);
 			if (files != null) {
-				filterTo = new Set<string>(files.map(f => f.path));
+				filterTo = new Set<string>(files.map(f => f.fileName));
 			}
 		} else {
-			const commit = await this.view.container.git.getCommit(this.uri.repoPath!, ref || 'HEAD');
+			const commit = await Container.git.getCommit(this.uri.repoPath!, ref || 'HEAD');
 			if (commit?.files != null) {
-				filterTo = new Set<string>(commit.files.map(f => f.path));
+				filterTo = new Set<string>(commit.files.map(f => f.fileName));
 			}
 		}
 
@@ -204,7 +201,7 @@ export class ResultsFilesNode extends ViewNode<ViewsWithCommits> {
 
 		results.filtered = {
 			filter: filter,
-			files: results.files!.filter(f => filterTo!.has(f.path)),
+			files: results.files!.filter(f => filterTo!.has(f.fileName)),
 		};
 	}
 }

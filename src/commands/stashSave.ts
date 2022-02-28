@@ -1,18 +1,23 @@
+'use strict';
 import { Uri } from 'vscode';
-import type { ScmResource } from '../@types/vscode.git.resources';
-import { ScmResourceGroupType } from '../@types/vscode.git.resources.enums';
-import { GitActions } from '../commands/gitCommands.actions';
-import { Commands } from '../constants';
-import type { Container } from '../container';
+import { GitActions } from '../commands';
+import { Container } from '../container';
 import { GitUri } from '../git/gitUri';
-import { command } from '../system/command';
 import {
 	Command,
+	command,
 	CommandContext,
+	Commands,
 	isCommandContextViewNodeHasFile,
 	isCommandContextViewNodeHasRepoPath,
 	isCommandContextViewNodeHasRepository,
-} from './base';
+} from './common';
+
+const enum ResourceGroupType {
+	Merge,
+	Index,
+	WorkingTree,
+}
 
 export interface StashSaveCommandArgs {
 	message?: string;
@@ -23,7 +28,7 @@ export interface StashSaveCommandArgs {
 
 @command()
 export class StashSaveCommand extends Command {
-	constructor(private readonly container: Container) {
+	constructor() {
 		super([Commands.StashSave, Commands.StashSaveFiles]);
 	}
 
@@ -41,15 +46,11 @@ export class StashSaveCommand extends Command {
 		} else if (context.type === 'scm-states') {
 			args = { ...args };
 			args.uris = context.scmResourceStates.map(s => s.resourceUri);
-			args.repoPath = (await this.container.git.getOrOpenRepository(args.uris[0]))?.path;
+			args.repoPath = await Container.git.getRepoPath(args.uris[0].fsPath);
 
-			const status = await this.container.git.getStatusForRepo(args.repoPath);
+			const status = await Container.git.getStatusForRepo(args.repoPath);
 			if (status?.computeWorkingTreeStatus().staged) {
-				if (
-					!context.scmResourceStates.some(
-						s => (s as ScmResource).resourceGroupType === ScmResourceGroupType.Index,
-					)
-				) {
+				if (!context.scmResourceStates.some(s => (s as any).resourceGroupType === ResourceGroupType.Index)) {
 					args.keepStaged = true;
 				}
 			}
@@ -59,9 +60,9 @@ export class StashSaveCommand extends Command {
 				(a, b) => a.concat(b.resourceStates.map(s => s.resourceUri)),
 				[],
 			);
-			args.repoPath = (await this.container.git.getOrOpenRepository(args.uris[0]))?.path;
+			args.repoPath = await Container.git.getRepoPath(args.uris[0].fsPath);
 
-			const status = await this.container.git.getStatusForRepo(args.repoPath);
+			const status = await Container.git.getStatusForRepo(args.repoPath);
 			if (status?.computeWorkingTreeStatus().staged) {
 				if (!context.scmResourceGroups.some(g => g.id === 'index')) {
 					args.keepStaged = true;

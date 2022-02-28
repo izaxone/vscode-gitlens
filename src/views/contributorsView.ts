@@ -1,30 +1,13 @@
-import {
-	CancellationToken,
-	commands,
-	ConfigurationChangeEvent,
-	Disposable,
-	ProgressLocation,
-	TreeItem,
-	TreeItemCollapsibleState,
-	window,
-} from 'vscode';
+'use strict';
+import { commands, ConfigurationChangeEvent, Disposable, TreeItem, TreeItemCollapsibleState } from 'vscode';
 import { Avatars } from '../avatars';
 import { configuration, ContributorsViewConfig, ViewFilesLayout } from '../configuration';
-import { Commands } from '../constants';
+import { GlyphChars } from '../constants';
 import { Container } from '../container';
+import { RepositoryChange, RepositoryChangeComparisonMode, RepositoryChangeEvent } from '../git/git';
 import { GitUri } from '../git/gitUri';
-import { GitContributor, RepositoryChange, RepositoryChangeComparisonMode, RepositoryChangeEvent } from '../git/models';
-import { executeCommand } from '../system/command';
-import { gate } from '../system/decorators/gate';
-import { debug } from '../system/decorators/log';
-import {
-	ContributorNode,
-	ContributorsNode,
-	RepositoriesSubscribeableNode,
-	RepositoryFolderNode,
-	RepositoryNode,
-	ViewNode,
-} from './nodes';
+import { debug, gate, Strings } from '../system';
+import { ContributorsNode, RepositoryFolderNode, unknownGitUri, ViewNode } from './nodes';
 import { ViewBase } from './viewBase';
 
 export class ContributorsRepositoryNode extends RepositoryFolderNode<ContributorsView, ContributorsNode> {
@@ -55,10 +38,17 @@ export class ContributorsRepositoryNode extends RepositoryFolderNode<Contributor
 	}
 }
 
-export class ContributorsViewNode extends RepositoriesSubscribeableNode<ContributorsView, ContributorsRepositoryNode> {
+export class ContributorsViewNode extends ViewNode<ContributorsView> {
+	protected override splatted = true;
+	private children: ContributorsRepositoryNode[] | undefined;
+
+	constructor(view: ContributorsView) {
+		super(unknownGitUri, view);
+	}
+
 	async getChildren(): Promise<ViewNode[]> {
 		if (this.children == null) {
-			const repositories = this.view.container.git.openRepositories;
+			const repositories = await Container.git.getOrderedRepositories();
 			if (repositories.length === 0) {
 				this.view.message = 'No contributors could be found.';
 
@@ -76,15 +66,19 @@ export class ContributorsViewNode extends RepositoriesSubscribeableNode<Contribu
 		if (this.children.length === 1) {
 			const [child] = this.children;
 
+			if (!child.repo.supportsChangeEvents) {
+				this.view.description = `${Strings.pad(GlyphChars.Warning, 0, 2)}Auto-refresh unavailable`;
+			}
+
 			const children = await child.getChildren();
 
-			// const all = this.view.container.config.views.contributors.showAllBranches;
+			// const all = Container.config.views.contributors.showAllBranches;
 
 			// let ref: string | undefined;
 			// // If we aren't getting all branches, get the upstream of the current branch if there is one
 			// if (!all) {
 			// 	try {
-			// 		const branch = await this.view.container.git.getBranch(this.uri.repoPath);
+			// 		const branch = await Container.git.getBranch(this.uri.repoPath);
 			// 		if (branch?.upstream?.name != null && !branch.upstream.missing) {
 			// 			ref = '@{u}';
 			// 		}
@@ -114,36 +108,51 @@ export class ContributorsViewNode extends RepositoriesSubscribeableNode<Contribu
 		const item = new TreeItem('Contributors', TreeItemCollapsibleState.Expanded);
 		return item;
 	}
+
+	override async getSplattedChild() {
+		if (this.children == null) {
+			await this.getChildren();
+		}
+
+		return this.children?.length === 1 ? this.children[0] : undefined;
+	}
+
+	@gate()
+	@debug()
+	override refresh(reset: boolean = false) {
+		if (reset && this.children != null) {
+			for (const child of this.children) {
+				child.dispose();
+			}
+			this.children = undefined;
+		}
+	}
 }
 
 export class ContributorsView extends ViewBase<ContributorsViewNode, ContributorsViewConfig> {
 	protected readonly configKey = 'contributors';
 
-	constructor(container: Container) {
-		super('gitlens.views.contributors', 'Contributors', container);
+	constructor() {
+		super('gitlens.views.contributors', 'Contributors');
 	}
 
-	override get canReveal(): boolean {
-		return this.config.reveal || !configuration.get('views.repositories.showContributors');
-	}
-
-	protected getRoot() {
+	getRoot() {
 		return new ContributorsViewNode(this);
 	}
 
 	protected registerCommands(): Disposable[] {
-		void this.container.viewCommands;
+		void Container.viewCommands;
 
 		return [
 			commands.registerCommand(
 				this.getQualifiedCommand('copy'),
-				() => executeCommand(Commands.ViewsCopy, this.selection),
+				() => commands.executeCommand('gitlens.views.copy', this.selection),
 				this,
 			),
 			commands.registerCommand(
 				this.getQualifiedCommand('refresh'),
-				() => {
-					this.container.git.resetCaches('contributors');
+				async () => {
+					await Container.git.resetCaches('contributors');
 					return this.refresh(true);
 				},
 				this,
@@ -215,70 +224,6 @@ export class ContributorsView extends ViewBase<ContributorsViewNode, Contributor
 		}
 
 		return true;
-	}
-
-	findContributor(contributor: GitContributor, token?: CancellationToken) {
-		const repoNodeId = RepositoryNode.getId(contributor.repoPath);
-
-		return this.findNode(
-			ContributorNode.getId(contributor.repoPath, contributor.name, contributor.email, contributor.username),
-			{
-				maxDepth: 2,
-				canTraverse: n => {
-					if (n instanceof ContributorsViewNode) return true;
-
-					if (n instanceof ContributorsRepositoryNode) {
-						return n.id.startsWith(repoNodeId);
-					}
-
-					return false;
-				},
-				token: token,
-			},
-		);
-	}
-
-	@gate(() => '')
-	async revealRepository(
-		repoPath: string,
-		options?: { select?: boolean; focus?: boolean; expand?: boolean | number },
-	) {
-		const node = await this.findNode(RepositoryFolderNode.getId(repoPath), {
-			maxDepth: 1,
-			canTraverse: n => n instanceof ContributorsViewNode || n instanceof RepositoryFolderNode,
-		});
-
-		if (node !== undefined) {
-			await this.reveal(node, options);
-		}
-
-		return node;
-	}
-
-	@gate(() => '')
-	async revealContributor(
-		contributor: GitContributor,
-		options?: {
-			select?: boolean;
-			focus?: boolean;
-			expand?: boolean | number;
-		},
-	) {
-		return window.withProgress(
-			{
-				location: ProgressLocation.Notification,
-				title: `Revealing contributor '${contributor.name}' in the side bar...`,
-				cancellable: true,
-			},
-			async (progress, token) => {
-				const node = await this.findContributor(contributor, token);
-				if (node == null) return undefined;
-
-				await this.ensureRevealNode(node, options);
-
-				return node;
-			},
-		);
 	}
 
 	private setFilesLayout(layout: ViewFilesLayout) {
